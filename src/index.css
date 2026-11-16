@@ -25,3 +25,15 @@ body { margin: 0; background: #F4F6F5; -webkit-text-size-adjust: 100%; }
   .app-main { padding-bottom: calc(88px + env(safe-area-inset-bottom, 0px)) !important; }
   .app-toast { bottom: calc(76px + env(safe-area-inset-bottom, 0px)) !important; }
 }
+
+/* ---- Carga de estadísticas ---- */
+.stat-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px 10px; }
+.stepper-btn { height: 44px; width: 44px; touch-action: manipulation; user-select: none; -webkit-user-select: none; transition: transform 80ms; }
+.stepper-btn:active:not(:disabled) { transform: scale(0.92); }
+
+@media (min-width: 480px) {
+  .stat-grid { grid-template-columns: repeat(3, 1fr); }
+}
+@media (min-width: 768px) {
+  .stepper-btn { height: 38px; width: 38px; }
+}
