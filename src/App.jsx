@@ -1,0 +1,1266 @@
+import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import {
+  Home, Plus, ListChecks, Users, BarChart3, ChevronLeft, Check,
+  Pencil, Trash2, X, MapPin, Calendar, Trophy, Minus, Download, Unlock,
+  Cloud, CloudOff, Shield, LogIn, LogOut
+} from "lucide-react";
+import { loadDb, saveDiff } from "./lib/syncDb";
+
+// ============================================================
+// CONFIGURACIÓN DE ESTADÍSTICAS
+// Para agregar una métrica nueva en el futuro alcanza con sumar
+// una entrada acá: aparece sola en la carga, las tablas y Excel.
+// ============================================================
+const STAT_FIELDS = [
+  { key: "puntos", label: "Puntos", short: "Pts" },
+  { key: "asistencias", label: "Asistencias", short: "Asist." },
+  { key: "rebotes", label: "Rebotes", short: "Reb." },
+  { key: "tiros", label: "Tiros", short: "Tiros" },
+  { key: "robos", label: "Robos", short: "Robos" },
+  { key: "perdidas", label: "Pérdidas", short: "Pérd." },
+];
+
+const TEAM_SEED = [
+  "La Patriada A", "La Patriada B", "Escorpiones",
+  "Fosforitos", "Uruguay Korf", "CEF 102",
+];
+
+const SAVE_DELAY = 900;
+
+const INK = "#0F1B2B";
+const PAPER = "#F4F6F5";
+const GOLD = "#E3A63E";
+const CARD = "#FFFFFF";
+const LINE = "#E2E6E4";
+const MUTED = "#5A6570";
+const FAINT = "#8993A0";
+const RED = "#B3261E";
+const CHIP = "#EDEFEE";
+const GREEN = "#1E8A83";
+
+const COLOR_A = { ring: "#1E8A83", bg: "#EAF6F4", text: "#0F5C56", bar: "#1E8A83" };
+const COLOR_B = { ring: "#C4432F", bg: "#FCEEEA", text: "#8A2E1E", bar: "#C4432F" };
+
+const cardStyle = { borderRadius: 12, border: `1px solid ${LINE}`, background: CARD };
+const inputStyle = { width: "100%", borderRadius: 8, border: `1px solid ${LINE}`, background: "white", padding: "10px 12px", fontSize: 15, outline: "none", boxSizing: "border-box" };
+const labelStyle = { display: "block", marginBottom: 4, fontSize: 14, fontWeight: 600 };
+const btnPrimary = { borderRadius: 8, padding: "10px 16px", fontWeight: 700, color: "white", background: INK, border: "none", cursor: "pointer" };
+const btnGhost = { borderRadius: 8, padding: "8px 16px", fontWeight: 500, background: CHIP, border: "none", cursor: "pointer" };
+const btnDanger = { borderRadius: 8, padding: "8px 16px", fontWeight: 700, color: "white", background: RED, border: "none", cursor: "pointer" };
+
+// ids UUID reales (Supabase los exige); el parámetro se ignora y queda por compatibilidad.
+const uid = () => crypto.randomUUID();
+
+const emptyStat = (partidoId, jugadorId) => {
+  const s = { id: uid("s"), partido_id: partidoId, jugador_id: jugadorId };
+  STAT_FIELDS.forEach((f) => { s[f.key] = 0; });
+  return s;
+};
+
+// Normaliza estadísticas viejas que no tengan los campos nuevos.
+const readStat = (s) => {
+  if (!s) { const e = {}; STAT_FIELDS.forEach((f) => { e[f.key] = 0; }); return e; }
+  const out = { ...s };
+  STAT_FIELDS.forEach((f) => { if (typeof out[f.key] !== "number") out[f.key] = 0; });
+  if (typeof s.tiros !== "number") out.tiros = s.puntos || 0; // partidos previos a la métrica de tiros
+  return out;
+};
+
+const efectividad = (puntos, tiros) => (tiros > 0 ? (puntos / tiros) * 100 : 0);
+
+const seedDb = () => {
+  const ligaId = uid("l");
+  return {
+    leagues: [{ id: ligaId, nombre: "Liga Bonaerense de Korfball" }],
+    teams: TEAM_SEED.map((nombre) => ({ id: uid("t"), nombre, liga_id: ligaId })),
+    players: [], matches: [], stats: [],
+  };
+};
+
+// Adapta bases guardadas con versiones anteriores de la app.
+const migrate = (db) => {
+  if (!db) return seedDb();
+  const next = { leagues: [], teams: [], players: [], matches: [], stats: [], ...db };
+  if (!next.leagues || next.leagues.length === 0) {
+    const ligaId = uid("l");
+    next.leagues = [{ id: ligaId, nombre: "Liga Bonaerense de Korfball" }];
+    next.teams = (next.teams || []).map((t) => ({ ...t, liga_id: t.liga_id || ligaId }));
+  }
+  const fallback = next.leagues[0].id;
+  next.teams = next.teams.map((t) => ({ ...t, liga_id: t.liga_id || fallback }));
+  next.matches = next.matches.map((m) => ({
+    ...m,
+    liga_id: m.liga_id || next.teams.find((t) => t.id === m.equipo_a_id)?.liga_id || fallback,
+  }));
+  return next;
+};
+
+// ---------- root ----------
+
+export default function App({ canEdit = false, userEmail = null, onLogin, onLogout }) {
+  const [db, setDb] = useState(null);
+  const [status, setStatus] = useState("loading");
+  const [view, setView] = useState({ name: "home" });
+  const [toast, setToast] = useState(null);
+  const [saveState, setSaveState] = useState("idle");
+  const [ligaId, setLigaId] = useState(null);
+
+  const pendingRef = useRef(null);
+  const timerRef = useRef(null);
+  const savingRef = useRef(false);
+  const syncedRef = useRef(null); // última foto confirmada en Supabase
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      let raw = null;
+      try { raw = await loadDb(); } catch (e) { console.error(e); }
+      if (cancelled) return;
+      if (!raw) { setStatus("error"); return; }
+      syncedRef.current = raw;
+      const migrated = migrate(raw);
+      setDb(migrated);
+      setLigaId(migrated.leagues[0].id);
+      setStatus("ready");
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  const flush = useCallback(async () => {
+    if (savingRef.current) return;
+    const data = pendingRef.current;
+    if (data === null) return;
+    savingRef.current = true;
+    pendingRef.current = null;
+    let ok = false;
+    for (let attempt = 0; attempt < 3 && !ok; attempt++) {
+      try {
+        await saveDiff(syncedRef.current, data);
+        syncedRef.current = data;
+        ok = true;
+      } catch (e) { ok = false; }
+      if (!ok) await new Promise((r) => setTimeout(r, 700 * (attempt + 1)));
+    }
+    savingRef.current = false;
+    if (!ok) {
+      if (pendingRef.current === null) pendingRef.current = data;
+      setSaveState("error");
+      timerRef.current = setTimeout(flush, 2500);
+      return;
+    }
+    if (pendingRef.current !== null) {
+      timerRef.current = setTimeout(flush, SAVE_DELAY);
+      setSaveState("pending");
+    } else setSaveState("idle");
+  }, []);
+
+  const commit = useCallback((updater) => {
+    if (!canEdit) { setToast("Ingresá como organizador para editar."); return; }
+    setDb((prev) => {
+      const next = typeof updater === "function" ? updater(prev) : updater;
+      pendingRef.current = next;
+      setSaveState("pending");
+      if (timerRef.current) clearTimeout(timerRef.current);
+      timerRef.current = setTimeout(flush, SAVE_DELAY);
+      return next;
+    });
+  }, [flush, canEdit]);
+
+  useEffect(() => () => { if (timerRef.current) clearTimeout(timerRef.current); }, []);
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 3500);
+    return () => clearTimeout(t);
+  }, [toast]);
+
+  if (status === "error") {
+    return (
+      <div style={{ background: INK, minHeight: 400, display: "flex", alignItems: "center", justifyContent: "center", padding: 40 }}>
+        <p style={{ fontSize: 14, color: "#C9D2DB", textAlign: "center" }}>No se pudieron cargar los datos. Revisá tu conexión y recargá la página.</p>
+      </div>
+    );
+  }
+
+  if (status === "loading" || !db) {
+    return (
+      <div style={{ background: INK, minHeight: 400, display: "flex", alignItems: "center", justifyContent: "center", padding: 40 }}>
+        <div style={{ textAlign: "center" }}>
+          <div className="animate-spin" style={{ margin: "0 auto 16px", height: 40, width: 40, borderRadius: 9999, border: `3px solid ${GOLD}55`, borderTopColor: "transparent" }} />
+          <p style={{ fontSize: 14, color: "#C9D2DB" }}>Cargando datos…</p>
+        </div>
+      </div>
+    );
+  }
+
+  const liga = db.leagues.find((l) => l.id === ligaId) || db.leagues[0];
+  const ctx = { db, commit, setView, setToast, liga, ligaId: liga.id, canEdit };
+
+  return (
+    <div style={{ background: PAPER, minHeight: 600, color: "#10151C" }} className="font-sans">
+      <TopNav view={view} setView={setView} saveState={saveState} db={db} liga={liga} setLigaId={setLigaId} canEdit={canEdit} userEmail={userEmail} onLogin={onLogin} onLogout={onLogout} />
+      <main style={{ maxWidth: 1000, margin: "0 auto", padding: "16px 16px 64px" }}>
+        {view.name === "home" && <HomeView {...ctx} />}
+        {view.name === "new" && <NewMatchView {...ctx} />}
+        {view.name === "matches" && <MatchesView {...ctx} />}
+        {view.name === "match" && <MatchView {...ctx} matchId={view.matchId} />}
+        {view.name === "teams" && <TeamsView {...ctx} teamId={view.teamId} />}
+        {view.name === "stats" && <StatsView {...ctx} />}
+        {view.name === "leagues" && <LeaguesView {...ctx} setLigaId={setLigaId} />}
+      </main>
+      {toast && (
+        <div style={{ position: "fixed", left: 0, right: 0, bottom: 16, display: "flex", justifyContent: "center", padding: "0 16px", zIndex: 50 }}>
+          <div style={{ borderRadius: 8, background: "#10151C", padding: "10px 16px", fontSize: 14, color: "white", boxShadow: "0 4px 12px rgba(0,0,0,0.2)" }}>{toast}</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------- nav ----------
+
+function SaveIndicator({ saveState }) {
+  if (saveState === "idle") return null;
+  const error = saveState === "error";
+  const Icon = error ? CloudOff : Cloud;
+  return (
+    <span style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0, fontSize: 11, color: error ? "#F0A8A0" : "#9AA7B2" }}>
+      <Icon size={14} /><span>{error ? "Reintentando…" : "Guardando…"}</span>
+    </span>
+  );
+}
+
+function TopNav({ view, setView, saveState, db, liga, setLigaId, canEdit, userEmail, onLogin, onLogout }) {
+  const items = [
+    { name: "home", label: "Inicio", icon: Home },
+    { name: "new", label: "Nuevo partido", icon: Plus },
+    { name: "matches", label: "Partidos", icon: ListChecks },
+    { name: "teams", label: "Equipos", icon: Users },
+    { name: "stats", label: "Estadísticas", icon: BarChart3 },
+    { name: "leagues", label: "Ligas", icon: Shield },
+  ];
+  return (
+    <header style={{ background: INK, position: "sticky", top: 0, zIndex: 40 }}>
+      <div style={{ maxWidth: 1000, margin: "0 auto", display: "flex", alignItems: "center", gap: 8, padding: "10px 16px", overflowX: "auto" }}>
+        <button type="button" onClick={() => setView({ name: "home" })} style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0, background: "transparent", border: "none", cursor: "pointer" }}>
+          <span style={{ display: "flex", height: 32, width: 32, alignItems: "center", justifyContent: "center", borderRadius: 8, background: GOLD, color: INK, fontWeight: 900, fontSize: 13 }}>LK</span>
+        </button>
+        <select value={liga.id} onChange={(e) => { setLigaId(e.target.value); setView({ name: "home" }); }}
+          style={{ flexShrink: 0, borderRadius: 8, border: `1px solid #2A3A4E`, background: "#16263A", color: "white", padding: "7px 10px", fontSize: 13, fontWeight: 600, maxWidth: 190, cursor: "pointer" }}>
+          {db.leagues.map((l) => <option key={l.id} value={l.id}>{l.nombre}</option>)}
+        </select>
+        <nav style={{ display: "flex", gap: 4, flex: 1 }}>
+          {items.filter((it) => canEdit || it.name !== "new").map((it) => {
+            const active = view.name === it.name;
+            const Icon = it.icon;
+            return (
+              <button type="button" key={it.name} onClick={() => setView({ name: it.name })}
+                style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0, borderRadius: 8, padding: "8px 12px", fontSize: 14, fontWeight: 500, border: "none", cursor: "pointer", background: active ? GOLD : "transparent", color: active ? INK : "#C9D2DB" }}>
+                <Icon size={16} strokeWidth={2.4} /><span>{it.label}</span>
+              </button>
+            );
+          })}
+        </nav>
+        <SaveIndicator saveState={saveState} />
+        <button type="button" onClick={canEdit ? onLogout : onLogin} title={canEdit ? userEmail : "Ingreso de organizadores"}
+          style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0, borderRadius: 8, padding: "8px 12px", fontSize: 13, fontWeight: 600, border: "1px solid #2A3A4E", background: "transparent", color: "#C9D2DB", cursor: "pointer" }}>
+          {canEdit ? <LogOut size={15} /> : <LogIn size={15} />}<span>{canEdit ? "Salir" : "Organizadores"}</span>
+        </button>
+      </div>
+    </header>
+  );
+}
+
+function BackBar({ onBack, title, right }) {
+  return (
+    <div style={{ marginBottom: 16, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+      <button type="button" onClick={onBack} style={{ display: "flex", alignItems: "center", gap: 4, borderRadius: 8, padding: "6px 8px", fontSize: 14, fontWeight: 500, color: MUTED, background: "transparent", border: "none", cursor: "pointer" }}>
+        <ChevronLeft size={18} /> Volver
+      </button>
+      {title && <h1 style={{ flex: 1, fontSize: 20, fontWeight: 800, letterSpacing: "-0.01em" }}>{title}</h1>}
+      {right}
+    </div>
+  );
+}
+
+// ---------- helpers ----------
+
+const teamName = (db, id) => db.teams.find((t) => t.id === id)?.nombre || "—";
+const teamsOf = (db, ligaId) => db.teams.filter((t) => t.liga_id === ligaId);
+const matchesOf = (db, ligaId) => db.matches.filter((m) => m.liga_id === ligaId);
+
+function matchScore(db, matchId, teamId) {
+  return db.stats
+    .filter((s) => s.partido_id === matchId)
+    .filter((s) => db.players.find((pl) => pl.id === s.jugador_id)?.equipo_id === teamId)
+    .reduce((sum, s) => sum + (s.puntos || 0), 0);
+}
+
+function fmtFecha(fecha) {
+  if (!fecha) return "";
+  const [y, m, d] = fecha.split("-");
+  return `${d}/${m}/${y}`;
+}
+
+function descargarCSV(nombreArchivo, filas) {
+  const esc = (v) => {
+    const s = String(v ?? "");
+    return /[";\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const contenido = "\uFEFF" + filas.map((f) => f.map(esc).join(";")).join("\r\n");
+  const blob = new Blob([contenido], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = nombreArchivo;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function EmptyState({ text, action }) {
+  return (
+    <div style={{ borderRadius: 10, border: `1px dashed ${LINE}`, padding: 24, textAlign: "center", fontSize: 14, color: MUTED }}>
+      <p>{text}</p>{action}
+    </div>
+  );
+}
+
+function Modal({ children, onClose, wide }) {
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 50, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.4)", padding: 16, overflowY: "auto" }} onClick={onClose}>
+      <div style={{ width: "100%", maxWidth: wide ? 460 : 360, borderRadius: 12, background: "white", padding: 20, boxShadow: "0 10px 30px rgba(0,0,0,0.2)" }} onClick={(e) => e.stopPropagation()}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+// ---------- home ----------
+
+function HomeView({ db, setView, liga, ligaId }) {
+  const partidos = matchesOf(db, ligaId);
+  const enCurso = partidos.filter((m) => m.estado === "en_curso");
+  const recientes = [...partidos].sort((a, b) => (b.fecha + (b.hora || "")).localeCompare(a.fecha + (a.hora || ""))).slice(0, 4);
+  const equipos = teamsOf(db, ligaId);
+
+  return (
+    <div>
+      <section style={{ marginBottom: 32, paddingTop: 16 }}>
+        <p style={{ fontSize: 14, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", color: GOLD }}>{liga.nombre}</p>
+        <h1 style={{ marginTop: 4, fontSize: 30, fontWeight: 900, letterSpacing: "-0.01em" }}>Estadísticas de partido, en tiempo real.</h1>
+        <p style={{ marginTop: 8, maxWidth: 560, color: MUTED }}>Cargá puntos, asistencias, rebotes, tiros, robos y pérdidas de cada jugador durante el partido.</p>
+        <div style={{ marginTop: 20, display: "flex", flexWrap: "wrap", gap: 12 }}>
+          <button type="button" onClick={() => setView({ name: "new" })} style={{ ...btnPrimary, display: "flex", alignItems: "center", gap: 8, padding: "12px 20px", borderRadius: 10 }}>
+            <Plus size={18} /> Crear nuevo partido
+          </button>
+          <button type="button" onClick={() => setView({ name: "matches" })} style={{ display: "flex", alignItems: "center", gap: 8, borderRadius: 10, padding: "12px 20px", fontWeight: 600, border: `1px solid ${LINE}`, background: CARD, cursor: "pointer" }}>
+            <ListChecks size={18} /> Ver partidos
+          </button>
+        </div>
+      </section>
+
+      {enCurso.length > 0 && (
+        <section style={{ marginBottom: 32 }}>
+          <h2 style={{ marginBottom: 8, fontSize: 13, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", color: MUTED }}>En curso ahora</h2>
+          <div className="grid gap-3 sm:grid-cols-2">
+            {enCurso.map((m) => <MatchCard key={m.id} db={db} match={m} onClick={() => setView({ name: "match", matchId: m.id })} />)}
+          </div>
+        </section>
+      )}
+
+      <section style={{ marginBottom: 32 }}>
+        <div style={{ marginBottom: 8, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <h2 style={{ fontSize: 13, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", color: MUTED }}>Últimos partidos</h2>
+          <button type="button" onClick={() => setView({ name: "matches" })} style={{ fontSize: 14, fontWeight: 600, color: COLOR_A.text, background: "transparent", border: "none", cursor: "pointer" }}>Ver todos</button>
+        </div>
+        {recientes.length === 0
+          ? <EmptyState text="Todavía no se registraron partidos en esta liga." />
+          : <div className="grid gap-3 sm:grid-cols-2">{recientes.map((m) => <MatchCard key={m.id} db={db} match={m} onClick={() => setView({ name: "match", matchId: m.id })} />)}</div>}
+      </section>
+
+      <section>
+        <h2 style={{ marginBottom: 8, fontSize: 13, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", color: MUTED }}>Equipos</h2>
+        {equipos.length === 0 ? (
+          <EmptyState text="Esta liga no tiene equipos todavía."
+            action={<button type="button" onClick={() => setView({ name: "teams" })} style={{ ...btnPrimary, marginTop: 12, fontSize: 14 }}>Agregar equipos</button>} />
+        ) : (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+            {equipos.map((t) => (
+              <button type="button" key={t.id} onClick={() => setView({ name: "teams", teamId: t.id })} style={{ borderRadius: 9999, border: `1px solid ${LINE}`, background: CARD, padding: "8px 16px", fontSize: 14, fontWeight: 500, cursor: "pointer" }}>
+                {t.nombre}
+              </button>
+            ))}
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function MatchCard({ db, match, onClick, onEdit, onDelete }) {
+  const scoreA = matchScore(db, match.id, match.equipo_a_id);
+  const scoreB = matchScore(db, match.id, match.equipo_b_id);
+  const finalized = match.estado === "finalizado";
+  return (
+    <div style={{ ...cardStyle, padding: 16 }}>
+      <div style={{ marginBottom: 8, display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: 12, color: MUTED }}>
+        <span style={{ display: "flex", alignItems: "center", gap: 4 }}><Calendar size={12} /> {fmtFecha(match.fecha)} {match.hora ? `· ${match.hora}` : ""}</span>
+        <span style={{ borderRadius: 9999, padding: "2px 8px", fontWeight: 700, background: finalized ? "#E9EEF0" : `${GOLD}33`, color: finalized ? MUTED : "#8A6410" }}>
+          {finalized ? "Finalizado" : "En curso"}
+        </span>
+      </div>
+      <button type="button" onClick={onClick} style={{ display: "block", width: "100%", textAlign: "left", background: "transparent", border: "none", padding: 0, cursor: "pointer" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+          <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: 700, color: COLOR_A.text }}>{teamName(db, match.equipo_a_id)}</span>
+          <span style={{ flexShrink: 0, borderRadius: 6, background: INK, padding: "4px 10px", fontFamily: "monospace", fontSize: 14, fontWeight: 700, color: "white" }}>{scoreA} - {scoreB}</span>
+          <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textAlign: "right", fontWeight: 700, color: COLOR_B.text }}>{teamName(db, match.equipo_b_id)}</span>
+        </div>
+        {match.lugar && <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 4, fontSize: 12, color: MUTED }}><MapPin size={12} /> {match.lugar}</div>}
+      </button>
+      {(onEdit || onDelete) && (
+        <div style={{ marginTop: 12, display: "flex", gap: 8, borderTop: `1px solid ${LINE}`, paddingTop: 10 }}>
+          {onEdit && <button type="button" onClick={onEdit} style={{ display: "flex", alignItems: "center", gap: 4, borderRadius: 6, padding: "6px 10px", fontSize: 13, fontWeight: 600, background: CHIP, border: "none", cursor: "pointer" }}><Pencil size={14} /> Editar</button>}
+          {onDelete && <button type="button" onClick={onDelete} style={{ display: "flex", alignItems: "center", gap: 4, borderRadius: 6, padding: "6px 10px", fontSize: 13, fontWeight: 600, background: "transparent", color: RED, border: `1px solid ${LINE}`, cursor: "pointer" }}><Trash2 size={14} /> Borrar</button>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------- new match ----------
+
+function NewMatchView({ db, commit, setView, ligaId }) {
+  const equipos = teamsOf(db, ligaId);
+  const [equipoA, setEquipoA] = useState("");
+  const [equipoB, setEquipoB] = useState("");
+  const [fecha, setFecha] = useState(() => new Date().toISOString().slice(0, 10));
+  const [hora, setHora] = useState("");
+  const [lugar, setLugar] = useState("");
+  const [error, setError] = useState("");
+
+  const submit = () => {
+    if (!equipoA || !equipoB) { setError("Elegí los dos equipos."); return; }
+    if (equipoA === equipoB) { setError("El equipo local y el visitante no pueden ser el mismo."); return; }
+    const match = {
+      id: uid("m"), liga_id: ligaId, equipo_a_id: equipoA, equipo_b_id: equipoB,
+      fecha, hora: hora || null, lugar: lugar || null, estado: "en_curso",
+      resultado_equipo_a: 0, resultado_equipo_b: 0,
+    };
+    commit((prev) => ({ ...prev, matches: [...prev.matches, match] }));
+    setView({ name: "match", matchId: match.id });
+  };
+
+  return (
+    <div style={{ maxWidth: 520 }}>
+      <BackBar onBack={() => setView({ name: "home" })} title="Nuevo partido" />
+      {equipos.length < 2 ? (
+        <EmptyState text="Necesitás al menos dos equipos en esta liga para crear un partido."
+          action={<button type="button" onClick={() => setView({ name: "teams" })} style={{ ...btnPrimary, marginTop: 12, fontSize: 14 }}>Ir a Equipos</button>} />
+      ) : (
+        <div style={{ ...cardStyle, padding: 20, display: "flex", flexDirection: "column", gap: 16 }}>
+          <div>
+            <label style={labelStyle}>Equipo local</label>
+            <select value={equipoA} onChange={(e) => setEquipoA(e.target.value)} style={inputStyle}>
+              <option value="">Seleccionar equipo…</option>
+              {equipos.map((t) => <option key={t.id} value={t.id} disabled={t.id === equipoB}>{t.nombre}</option>)}
+            </select>
+          </div>
+          <div>
+            <label style={labelStyle}>Equipo visitante</label>
+            <select value={equipoB} onChange={(e) => setEquipoB(e.target.value)} style={inputStyle}>
+              <option value="">Seleccionar equipo…</option>
+              {equipos.map((t) => <option key={t.id} value={t.id} disabled={t.id === equipoA}>{t.nombre}</option>)}
+            </select>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <div>
+              <label style={labelStyle}>Fecha</label>
+              <input type="date" value={fecha} onChange={(e) => setFecha(e.target.value)} style={inputStyle} />
+            </div>
+            <div>
+              <label style={labelStyle}>Hora (opcional)</label>
+              <input type="time" value={hora} onChange={(e) => setHora(e.target.value)} style={inputStyle} />
+            </div>
+          </div>
+          <div>
+            <label style={labelStyle}>Lugar (opcional)</label>
+            <input type="text" value={lugar} onChange={(e) => setLugar(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} placeholder="Ej: Polideportivo Municipal" style={inputStyle} />
+          </div>
+          {error && <p style={{ fontSize: 14, fontWeight: 500, color: RED }}>{error}</p>}
+          <button type="button" onClick={submit} style={{ ...btnPrimary, width: "100%", padding: "12px 0", borderRadius: 10 }}>Crear partido y empezar a cargar</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------- edit / delete match ----------
+
+function EditMatchModal({ db, match, commit, onClose, onReopen }) {
+  const equipos = teamsOf(db, match.liga_id);
+  const finalized = match.estado === "finalizado";
+  const [equipoA, setEquipoA] = useState(match.equipo_a_id);
+  const [equipoB, setEquipoB] = useState(match.equipo_b_id);
+  const [fecha, setFecha] = useState(match.fecha);
+  const [hora, setHora] = useState(match.hora || "");
+  const [lugar, setLugar] = useState(match.lugar || "");
+  const [error, setError] = useState("");
+  const cambioDeEquipos = equipoA !== match.equipo_a_id || equipoB !== match.equipo_b_id;
+
+  const guardar = () => {
+    if (!equipoA || !equipoB) { setError("Elegí los dos equipos."); return; }
+    if (equipoA === equipoB) { setError("El equipo local y el visitante no pueden ser el mismo."); return; }
+    commit((prev) => ({
+      ...prev,
+      stats: cambioDeEquipos
+        ? prev.stats.filter((s) => {
+            if (s.partido_id !== match.id) return true;
+            const p = prev.players.find((pl) => pl.id === s.jugador_id);
+            return p && (p.equipo_id === equipoA || p.equipo_id === equipoB);
+          })
+        : prev.stats,
+      matches: prev.matches.map((m) => m.id === match.id
+        ? { ...m, equipo_a_id: equipoA, equipo_b_id: equipoB, fecha, hora: hora || null, lugar: lugar || null }
+        : m),
+    }));
+    onClose();
+  };
+
+  return (
+    <Modal onClose={onClose} wide>
+      <h3 style={{ marginBottom: 12, fontSize: 18, fontWeight: 800 }}>Editar partido</h3>
+      {finalized && (
+        <div style={{ marginBottom: 16, borderRadius: 8, background: `${GOLD}22`, padding: "10px 12px" }}>
+          <p style={{ fontSize: 13, color: "#8A6410", marginBottom: 8 }}>
+            Este partido está finalizado. Acá podés cambiar equipos, fecha, hora y lugar. Para corregir los puntos, asistencias u otras estadísticas de los jugadores, primero hay que reabrirlo.
+          </p>
+          <button type="button" onClick={() => { onReopen(); onClose(); }} style={{ display: "flex", alignItems: "center", gap: 6, borderRadius: 8, padding: "8px 14px", fontSize: 13, fontWeight: 700, color: INK, background: "white", border: `1px solid ${GOLD}`, cursor: "pointer" }}>
+            <Unlock size={15} /> Reabrir para editar estadísticas
+          </button>
+        </div>
+      )}
+      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        <div>
+          <label style={labelStyle}>Equipo local</label>
+          <select value={equipoA} onChange={(e) => setEquipoA(e.target.value)} style={inputStyle}>
+            {equipos.map((t) => <option key={t.id} value={t.id} disabled={t.id === equipoB}>{t.nombre}</option>)}
+          </select>
+        </div>
+        <div>
+          <label style={labelStyle}>Equipo visitante</label>
+          <select value={equipoB} onChange={(e) => setEquipoB(e.target.value)} style={inputStyle}>
+            {equipos.map((t) => <option key={t.id} value={t.id} disabled={t.id === equipoA}>{t.nombre}</option>)}
+          </select>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <div><label style={labelStyle}>Fecha</label><input type="date" value={fecha} onChange={(e) => setFecha(e.target.value)} style={inputStyle} /></div>
+          <div><label style={labelStyle}>Hora</label><input type="time" value={hora} onChange={(e) => setHora(e.target.value)} style={inputStyle} /></div>
+        </div>
+        <div><label style={labelStyle}>Lugar</label><input type="text" value={lugar} onChange={(e) => setLugar(e.target.value)} style={inputStyle} /></div>
+        {cambioDeEquipos && <p style={{ fontSize: 13, color: "#8A6410", background: `${GOLD}22`, padding: "8px 10px", borderRadius: 6 }}>Al cambiar los equipos se borrarán las estadísticas de los equipos que salen del partido.</p>}
+        {error && <p style={{ fontSize: 14, fontWeight: 500, color: RED }}>{error}</p>}
+      </div>
+      <div style={{ marginTop: 16, display: "flex", justifyContent: "flex-end", gap: 8 }}>
+        <button type="button" onClick={onClose} style={btnGhost}>Cancelar</button>
+        <button type="button" onClick={guardar} style={btnPrimary}>Guardar cambios</button>
+      </div>
+    </Modal>
+  );
+}
+
+function DeleteMatchModal({ db, match, commit, onClose, afterDelete }) {
+  const borrar = () => {
+    commit((prev) => ({
+      ...prev,
+      matches: prev.matches.filter((m) => m.id !== match.id),
+      stats: prev.stats.filter((s) => s.partido_id !== match.id),
+    }));
+    onClose();
+    if (afterDelete) afterDelete();
+  };
+  return (
+    <Modal onClose={onClose}>
+      <h3 style={{ marginBottom: 8, fontSize: 18, fontWeight: 800 }}>¿Borrar partido?</h3>
+      <p style={{ marginBottom: 20, fontSize: 14, color: MUTED }}>
+        Se eliminará <strong>{teamName(db, match.equipo_a_id)} vs {teamName(db, match.equipo_b_id)}</strong> del {fmtFecha(match.fecha)} con todas sus estadísticas. No se puede deshacer.
+      </p>
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+        <button type="button" onClick={onClose} style={btnGhost}>Cancelar</button>
+        <button type="button" onClick={borrar} style={btnDanger}>Borrar partido</button>
+      </div>
+    </Modal>
+  );
+}
+
+// ---------- matches list ----------
+
+function MatchesView({ db, commit, setView, ligaId }) {
+  const [filter, setFilter] = useState("todos");
+  const [editTarget, setEditTarget] = useState(null);
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const reabrirDesdeListado = (matchId) => commit((prev) => ({ ...prev, matches: prev.matches.map((m) => (m.id === matchId ? { ...m, estado: "en_curso" } : m)) }));
+  const sorted = [...matchesOf(db, ligaId)].sort((a, b) => (b.fecha + (b.hora || "")).localeCompare(a.fecha + (a.hora || "")));
+  const list = sorted.filter((m) => (filter === "todos" ? true : m.estado === filter));
+
+  return (
+    <div>
+      <BackBar onBack={() => setView({ name: "home" })} title="Partidos" />
+      <div style={{ marginBottom: 16, display: "flex", gap: 8 }}>
+        {[["todos", "Todos"], ["en_curso", "En curso"], ["finalizado", "Finalizados"]].map(([val, label]) => (
+          <button type="button" key={val} onClick={() => setFilter(val)}
+            style={{ borderRadius: 9999, padding: "6px 12px", fontSize: 14, fontWeight: 500, cursor: "pointer", background: filter === val ? INK : "transparent", color: filter === val ? "white" : MUTED, border: `1px solid ${filter === val ? INK : LINE}` }}>
+            {label}
+          </button>
+        ))}
+      </div>
+      {list.length === 0 ? <EmptyState text="No hay partidos para este filtro." /> : (
+        <div className="grid gap-3 sm:grid-cols-2">
+          {list.map((m) => (
+            <MatchCard key={m.id} db={db} match={m}
+              onClick={() => setView({ name: "match", matchId: m.id })}
+              onEdit={() => setEditTarget(m)} onDelete={() => setDeleteTarget(m)} />
+          ))}
+        </div>
+      )}
+      {editTarget && <EditMatchModal db={db} match={db.matches.find((m) => m.id === editTarget.id) || editTarget} commit={commit} onClose={() => setEditTarget(null)} onReopen={() => reabrirDesdeListado(editTarget.id)} />}
+      {deleteTarget && <DeleteMatchModal db={db} match={deleteTarget} commit={commit} onClose={() => setDeleteTarget(null)} />}
+    </div>
+  );
+}
+
+// ---------- live match ----------
+
+function MatchView({ db, commit, matchId, setView }) {
+  const match = db.matches.find((m) => m.id === matchId);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+
+  if (!match) {
+    return (<div><BackBar onBack={() => setView({ name: "matches" })} title="Partido" /><EmptyState text="Este partido ya no existe." /></div>);
+  }
+
+  const finalized = match.estado === "finalizado";
+  const scoreA = matchScore(db, match.id, match.equipo_a_id);
+  const scoreB = matchScore(db, match.id, match.equipo_b_id);
+
+  const getStat = (jugadorId) => readStat(db.stats.find((st) => st.partido_id === matchId && st.jugador_id === jugadorId));
+
+  const bump = (jugadorId, field, delta) => {
+    if (finalized) return;
+    commit((prev) => {
+      const stats = [...prev.stats];
+      const idx = stats.findIndex((s) => s.partido_id === matchId && s.jugador_id === jugadorId);
+      if (idx === -1 && delta < 0) return prev;
+      const base = idx === -1 ? emptyStat(matchId, jugadorId) : readStat(stats[idx]);
+
+      if (field === "puntos") {
+        // Un gol es siempre un tiro convertido: el tiro se suma (o resta) junto con el punto.
+        const puntos = Math.max(0, base.puntos + delta);
+        const realDelta = puntos - base.puntos;
+        base.puntos = puntos;
+        base.tiros = Math.max(puntos, base.tiros + realDelta);
+      } else if (field === "tiros") {
+        base.tiros = Math.max(base.puntos, base.tiros + delta); // nunca menos tiros que goles
+      } else {
+        base[field] = Math.max(0, base[field] + delta);
+      }
+
+      if (idx === -1) stats.push(base); else stats[idx] = base;
+      return { ...prev, stats };
+    });
+  };
+
+  const finalize = () => {
+    commit((prev) => ({
+      ...prev,
+      matches: prev.matches.map((m) => m.id === matchId
+        ? { ...m, estado: "finalizado", resultado_equipo_a: matchScore(prev, matchId, m.equipo_a_id), resultado_equipo_b: matchScore(prev, matchId, m.equipo_b_id) }
+        : m),
+    }));
+    setConfirmOpen(false);
+  };
+
+  const reabrir = () => commit((prev) => ({ ...prev, matches: prev.matches.map((m) => (m.id === matchId ? { ...m, estado: "en_curso" } : m)) }));
+
+  return (
+    <div>
+      <BackBar onBack={() => setView({ name: "matches" })}
+        right={
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ borderRadius: 9999, padding: "4px 12px", fontSize: 12, fontWeight: 700, background: finalized ? "#E9EEF0" : `${GOLD}33`, color: finalized ? MUTED : "#8A6410" }}>{finalized ? "Finalizado" : "En curso"}</span>
+            {finalized && (
+              <button type="button" onClick={reabrir} title="Reabrir para editar estadísticas" style={{ display: "flex", alignItems: "center", gap: 6, borderRadius: 6, padding: "8px 10px", fontSize: 12, fontWeight: 700, color: INK, background: `${GOLD}33`, border: "none", cursor: "pointer" }}>
+                <Unlock size={14} /> Editar estadísticas
+              </button>
+            )}
+            <button type="button" onClick={() => setEditOpen(true)} title="Editar datos del partido" style={{ borderRadius: 6, padding: 8, background: CHIP, border: "none", cursor: "pointer" }}><Pencil size={16} /></button>
+            <button type="button" onClick={() => setDeleteOpen(true)} title="Borrar partido" style={{ borderRadius: 6, padding: 8, background: "transparent", border: `1px solid ${LINE}`, cursor: "pointer" }}><Trash2 size={16} color={RED} /></button>
+          </div>
+        } />
+
+      <div style={{ marginBottom: 24, overflow: "hidden", borderRadius: 16, background: INK }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 16px", fontSize: 12, color: "#9AA7B2" }}>
+          <span style={{ display: "flex", alignItems: "center", gap: 4 }}><Calendar size={12} /> {fmtFecha(match.fecha)} {match.hora ? `· ${match.hora}` : ""}</span>
+          {match.lugar && <span style={{ display: "flex", alignItems: "center", gap: 4 }}><MapPin size={12} /> {match.lugar}</span>}
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr", alignItems: "center", gap: 8, padding: "8px 16px 20px" }}>
+          <div style={{ textAlign: "left", minWidth: 0 }}><p style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: 700, color: COLOR_A.ring }}>{teamName(db, match.equipo_a_id)}</p></div>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 12 }}>
+            <span style={{ fontFamily: "monospace", fontSize: 40, fontWeight: 900, color: "white" }}>{scoreA}</span>
+            <span style={{ fontSize: 18, fontWeight: 700, color: "#5A6570" }}>–</span>
+            <span style={{ fontFamily: "monospace", fontSize: 40, fontWeight: 900, color: "white" }}>{scoreB}</span>
+          </div>
+          <div style={{ textAlign: "right", minWidth: 0 }}><p style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: 700, color: COLOR_B.ring }}>{teamName(db, match.equipo_b_id)}</p></div>
+        </div>
+      </div>
+
+      <div className="grid gap-6 lg:grid-cols-2">
+        <TeamStatsPanel db={db} teamId={match.equipo_a_id} getStat={getStat} bump={bump} finalized={finalized} color={COLOR_A} setView={setView} />
+        <TeamStatsPanel db={db} teamId={match.equipo_b_id} getStat={getStat} bump={bump} finalized={finalized} color={COLOR_B} setView={setView} />
+      </div>
+
+      <div style={{ marginTop: 32, display: "flex", justifyContent: "center" }}>
+        {finalized ? (
+          <button type="button" onClick={reabrir} style={{ display: "flex", alignItems: "center", gap: 8, borderRadius: 12, padding: "12px 20px", fontSize: 15, fontWeight: 700, color: INK, background: CHIP, border: `1px solid ${LINE}`, cursor: "pointer" }}>
+            <Unlock size={18} /> Reabrir para corregir estadísticas
+          </button>
+        ) : (
+          <button type="button" onClick={() => setConfirmOpen(true)} style={{ display: "flex", alignItems: "center", gap: 8, borderRadius: 12, padding: "14px 24px", fontSize: 16, fontWeight: 700, color: "white", background: RED, border: "none", cursor: "pointer" }}>
+            <Trophy size={18} /> Finalizar partido
+          </button>
+        )}
+      </div>
+
+      {confirmOpen && (
+        <Modal onClose={() => setConfirmOpen(false)}>
+          <h3 style={{ marginBottom: 8, fontSize: 18, fontWeight: 800 }}>¿Finalizar el partido?</h3>
+          <p style={{ marginBottom: 20, fontSize: 14, color: MUTED }}>¿Está seguro de que desea finalizar el partido? Las estadísticas quedarán guardadas. Si necesitás corregir algo, vas a poder reabrirlo desde esta misma pantalla.</p>
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+            <button type="button" onClick={() => setConfirmOpen(false)} style={btnGhost}>Cancelar</button>
+            <button type="button" onClick={finalize} style={btnDanger}>Finalizar partido</button>
+          </div>
+        </Modal>
+      )}
+      {editOpen && <EditMatchModal db={db} match={match} commit={commit} onClose={() => setEditOpen(false)} onReopen={reabrir} />}
+      {deleteOpen && <DeleteMatchModal db={db} match={match} commit={commit} onClose={() => setDeleteOpen(false)} afterDelete={() => setView({ name: "matches" })} />}
+    </div>
+  );
+}
+
+function TeamStatsPanel({ db, teamId, getStat, bump, finalized, color, setView }) {
+  const players = db.players.filter((p) => p.equipo_id === teamId).sort((a, b) => a.numero - b.numero);
+  const totals = players.reduce((acc, p) => {
+    const s = getStat(p.id);
+    STAT_FIELDS.forEach((f) => { acc[f.key] += s[f.key]; });
+    return acc;
+  }, Object.fromEntries(STAT_FIELDS.map((f) => [f.key, 0])));
+
+  return (
+    <div style={cardStyle}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", borderTopLeftRadius: 12, borderTopRightRadius: 12, padding: "12px 16px", background: color.bg }}>
+        <h3 style={{ fontWeight: 800, color: color.text }}>{teamName(db, teamId)}</h3>
+        <span style={{ fontSize: 12, fontWeight: 700, color: color.text }}>{players.length} jugador{players.length === 1 ? "" : "es"}</span>
+      </div>
+
+      {players.length === 0 ? (
+        <div style={{ padding: 16 }}>
+          <EmptyState text="Este equipo todavía no tiene jugadores cargados."
+            action={<button type="button" onClick={() => setView({ name: "teams", teamId })} style={{ ...btnPrimary, marginTop: 12, fontSize: 14 }}>Agregar jugadores</button>} />
+        </div>
+      ) : (
+        <div>{players.map((p, i) => <PlayerStatRow key={p.id} player={p} stat={getStat(p.id)} bump={bump} finalized={finalized} color={color} isLast={i === players.length - 1} />)}</div>
+      )}
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, borderTop: `1px solid ${LINE}`, padding: "12px 16px" }}>
+        {STAT_FIELDS.map((f) => (
+          <div key={f.key} style={{ textAlign: "center" }}>
+            <p style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.03em", color: FAINT }}>Total {f.label.toLowerCase()}</p>
+            <p style={{ fontFamily: "monospace", fontSize: 20, fontWeight: 900, color: color.text }}>{totals[f.key]}</p>
+          </div>
+        ))}
+      </div>
+      <div style={{ borderTop: `1px solid ${LINE}`, padding: "8px 16px", textAlign: "center", fontSize: 12, color: MUTED }}>
+        Efectividad del equipo:{" "}
+        <strong style={{ color: color.text, fontFamily: "monospace" }}>
+          {totals.puntos}/{totals.tiros} ({efectividad(totals.puntos, totals.tiros).toFixed(0)}%)
+        </strong>
+      </div>
+    </div>
+  );
+}
+
+function StatStepper({ label, value, onDec, onInc, disabled, color, minValue = 0, hint }) {
+  const decDisabled = disabled || value <= minValue;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
+      <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.03em", color: FAINT }}>{label}</span>
+      <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+        <button type="button" onClick={onDec} disabled={decDisabled}
+          style={{ display: "flex", height: 34, width: 34, alignItems: "center", justifyContent: "center", borderRadius: 8, background: CHIP, color: "#10151C", border: "none", cursor: decDisabled ? "default" : "pointer", opacity: decDisabled ? 0.35 : 1 }}>
+          <Minus size={15} />
+        </button>
+        <span style={{ width: 22, textAlign: "center", fontFamily: "monospace", fontSize: 17, fontWeight: 700 }}>{value}</span>
+        <button type="button" onClick={onInc} disabled={disabled}
+          style={{ display: "flex", height: 34, width: 34, alignItems: "center", justifyContent: "center", borderRadius: 8, background: color.bar, color: "white", border: "none", cursor: disabled ? "default" : "pointer", opacity: disabled ? 0.35 : 1 }}>
+          <Plus size={15} />
+        </button>
+      </div>
+      <span style={{ fontSize: 10, fontFamily: "monospace", color: FAINT, minHeight: 12 }}>{hint || ""}</span>
+    </div>
+  );
+}
+
+function PlayerStatRow({ player, stat, bump, finalized, color, isLast }) {
+  return (
+    <div style={{ padding: "12px 16px", borderBottom: isLast ? "none" : `1px solid ${LINE}` }}>
+      <div style={{ display: "flex", minWidth: 0, alignItems: "center", gap: 8, marginBottom: 8 }}>
+        <span style={{ display: "flex", height: 28, width: 28, flexShrink: 0, alignItems: "center", justifyContent: "center", borderRadius: 6, background: color.bg, color: color.text, fontFamily: "monospace", fontSize: 12, fontWeight: 700 }}>{player.numero}</span>
+        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: 600 }}>{player.nombre}</span>
+      </div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 10, justifyContent: "flex-start" }}>
+        {STAT_FIELDS.map((f) => (
+          <StatStepper key={f.key} label={f.short} value={stat[f.key]} disabled={finalized} color={color}
+            minValue={f.key === "tiros" ? stat.puntos : 0}
+            hint={f.key === "tiros" && stat.tiros > 0 ? `${efectividad(stat.puntos, stat.tiros).toFixed(0)}%` : null}
+            onDec={() => bump(player.id, f.key, -1)} onInc={() => bump(player.id, f.key, 1)} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ---------- teams / players ----------
+
+function TeamsView({ db, commit, setView, teamId, ligaId, liga }) {
+  const equipos = teamsOf(db, ligaId);
+  const selected = equipos.find((t) => t.id === teamId) || equipos[0] || null;
+  const [form, setForm] = useState({ nombre: "", numero: "" });
+  const [editingId, setEditingId] = useState(null);
+  const [error, setError] = useState("");
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [nuevoEquipo, setNuevoEquipo] = useState("");
+  const [deleteTeam, setDeleteTeam] = useState(null);
+
+  const players = selected ? db.players.filter((p) => p.equipo_id === selected.id).sort((a, b) => a.numero - b.numero) : [];
+  const resetForm = () => { setForm({ nombre: "", numero: "" }); setEditingId(null); setError(""); };
+
+  const agregarEquipo = () => {
+    const nombre = nuevoEquipo.trim();
+    if (!nombre) return;
+    const id = uid("t");
+    commit((prev) => ({ ...prev, teams: [...prev.teams, { id, nombre, liga_id: ligaId }] }));
+    setNuevoEquipo("");
+    setView({ name: "teams", teamId: id });
+  };
+
+  const borrarEquipo = (team) => {
+    commit((prev) => {
+      const jugadores = prev.players.filter((p) => p.equipo_id === team.id).map((p) => p.id);
+      const partidos = prev.matches.filter((m) => m.equipo_a_id === team.id || m.equipo_b_id === team.id).map((m) => m.id);
+      return {
+        ...prev,
+        teams: prev.teams.filter((t) => t.id !== team.id),
+        players: prev.players.filter((p) => p.equipo_id !== team.id),
+        matches: prev.matches.filter((m) => !partidos.includes(m.id)),
+        stats: prev.stats.filter((s) => !jugadores.includes(s.jugador_id) && !partidos.includes(s.partido_id)),
+      };
+    });
+    setDeleteTeam(null);
+    setView({ name: "teams" });
+  };
+
+  const submit = () => {
+    if (!selected) return;
+    if (!form.nombre.trim() || form.numero === "") { setError("Completá nombre y número."); return; }
+    const numero = Number(form.numero);
+    if (Number.isNaN(numero) || numero < 0) { setError("El número debe ser válido."); return; }
+    if (editingId) {
+      commit((prev) => ({ ...prev, players: prev.players.map((p) => (p.id === editingId ? { ...p, nombre: form.nombre.trim(), numero } : p)) }));
+    } else {
+      commit((prev) => ({ ...prev, players: [...prev.players, { id: uid("p"), nombre: form.nombre.trim(), numero, equipo_id: selected.id }] }));
+    }
+    resetForm();
+  };
+
+  const removePlayer = (id) => {
+    commit((prev) => ({ ...prev, players: prev.players.filter((p) => p.id !== id), stats: prev.stats.filter((s) => s.jugador_id !== id) }));
+    setDeleteTarget(null);
+    if (editingId === id) resetForm();
+  };
+
+  return (
+    <div>
+      <BackBar onBack={() => setView({ name: "home" })} title={`Equipos · ${liga.nombre}`} />
+
+      <div style={{ marginBottom: 12, display: "flex", flexWrap: "wrap", gap: 8 }}>
+        {equipos.map((t) => (
+          <button type="button" key={t.id} onClick={() => { setView({ name: "teams", teamId: t.id }); resetForm(); }}
+            style={{ borderRadius: 9999, padding: "6px 14px", fontSize: 14, fontWeight: 500, cursor: "pointer", background: selected?.id === t.id ? INK : "transparent", color: selected?.id === t.id ? "white" : MUTED, border: `1px solid ${selected?.id === t.id ? INK : LINE}` }}>
+            {t.nombre}
+          </button>
+        ))}
+      </div>
+
+      <div style={{ marginBottom: 20, display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <input type="text" value={nuevoEquipo} onChange={(e) => setNuevoEquipo(e.target.value)} onKeyDown={(e) => e.key === "Enter" && agregarEquipo()}
+          placeholder="Nombre del nuevo equipo" style={{ ...inputStyle, width: 240, padding: "8px 12px", fontSize: 14 }} />
+        <button type="button" onClick={agregarEquipo} style={{ ...btnPrimary, display: "flex", alignItems: "center", gap: 6, padding: "8px 14px", fontSize: 14 }}>
+          <Plus size={16} /> Agregar equipo
+        </button>
+        {selected && (
+          <button type="button" onClick={() => setDeleteTeam(selected)} style={{ display: "flex", alignItems: "center", gap: 6, borderRadius: 8, padding: "8px 14px", fontSize: 14, fontWeight: 600, color: RED, background: "transparent", border: `1px solid ${LINE}`, cursor: "pointer" }}>
+            <Trash2 size={16} /> Borrar {selected.nombre}
+          </button>
+        )}
+      </div>
+
+      {!selected ? (
+        <EmptyState text="Esta liga todavía no tiene equipos. Agregá el primero arriba." />
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 20 }} className="lg:flex-row lg:items-start">
+          <div style={{ ...cardStyle, flex: 1, minWidth: 0 }}>
+            <div style={{ borderBottom: `1px solid ${LINE}`, padding: "12px 16px" }}><h3 style={{ fontWeight: 800 }}>Plantel de {selected.nombre}</h3></div>
+            {players.length === 0 ? (
+              <div style={{ padding: 16 }}><EmptyState text="Todavía no hay jugadores cargados para este equipo." /></div>
+            ) : (
+              <div>
+                {players.map((p, i) => (
+                  <div key={p.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "12px 16px", borderBottom: i === players.length - 1 ? "none" : `1px solid ${LINE}` }}>
+                    <div style={{ display: "flex", minWidth: 0, alignItems: "center", gap: 8 }}>
+                      <span style={{ display: "flex", height: 28, width: 28, flexShrink: 0, alignItems: "center", justifyContent: "center", borderRadius: 6, background: CHIP, fontFamily: "monospace", fontSize: 12, fontWeight: 700 }}>{p.numero}</span>
+                      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: 600 }}>{p.nombre}</span>
+                    </div>
+                    <div style={{ display: "flex", flexShrink: 0, gap: 4 }}>
+                      <button type="button" onClick={() => { setEditingId(p.id); setForm({ nombre: p.nombre, numero: String(p.numero) }); }} aria-label="Editar" style={{ borderRadius: 6, padding: 8, background: "transparent", border: "none", cursor: "pointer" }}><Pencil size={16} /></button>
+                      <button type="button" onClick={() => setDeleteTarget(p)} aria-label="Eliminar" style={{ borderRadius: 6, padding: 8, background: "transparent", border: "none", cursor: "pointer" }}><Trash2 size={16} color={RED} /></button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div style={{ ...cardStyle, padding: 16, width: "100%" }} className="lg:w-80 lg:shrink-0">
+            <h3 style={{ marginBottom: 12, fontWeight: 800 }}>{editingId ? "Editar jugador" : "Agregar jugador"}</h3>
+            <div style={{ marginBottom: 12 }}>
+              <label style={labelStyle}>Nombre y apellido</label>
+              <input type="text" value={form.nombre} onChange={(e) => setForm((f) => ({ ...f, nombre: e.target.value }))} onKeyDown={(e) => e.key === "Enter" && submit()} style={inputStyle} placeholder="Ej: Juan Pérez" />
+            </div>
+            <div style={{ marginBottom: 12 }}>
+              <label style={labelStyle}>Número de camiseta</label>
+              <input type="number" min="0" value={form.numero} onChange={(e) => setForm((f) => ({ ...f, numero: e.target.value }))} onKeyDown={(e) => e.key === "Enter" && submit()} style={inputStyle} placeholder="Ej: 7" />
+            </div>
+            {error && <p style={{ marginBottom: 12, fontSize: 14, fontWeight: 500, color: RED }}>{error}</p>}
+            <div style={{ display: "flex", gap: 8 }}>
+              <button type="button" onClick={submit} style={{ ...btnPrimary, display: "flex", flex: 1, alignItems: "center", justifyContent: "center", gap: 6, padding: "10px 0" }}>
+                <Check size={16} /> {editingId ? "Guardar" : "Agregar"}
+              </button>
+              {editingId && <button type="button" onClick={resetForm} style={{ ...btnGhost, padding: "10px 12px" }}><X size={16} /></button>}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {deleteTarget && (
+        <Modal onClose={() => setDeleteTarget(null)}>
+          <h3 style={{ marginBottom: 8, fontSize: 18, fontWeight: 800 }}>¿Eliminar jugador?</h3>
+          <p style={{ marginBottom: 20, fontSize: 14, color: MUTED }}>Se eliminará a <strong>{deleteTarget.nombre}</strong> y sus estadísticas en todos los partidos.</p>
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+            <button type="button" onClick={() => setDeleteTarget(null)} style={btnGhost}>Cancelar</button>
+            <button type="button" onClick={() => removePlayer(deleteTarget.id)} style={btnDanger}>Eliminar</button>
+          </div>
+        </Modal>
+      )}
+
+      {deleteTeam && (
+        <Modal onClose={() => setDeleteTeam(null)}>
+          <h3 style={{ marginBottom: 8, fontSize: 18, fontWeight: 800 }}>¿Borrar equipo?</h3>
+          <p style={{ marginBottom: 20, fontSize: 14, color: MUTED }}>
+            Se eliminará <strong>{deleteTeam.nombre}</strong>, todos sus jugadores y los partidos donde participó. No se puede deshacer.
+          </p>
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+            <button type="button" onClick={() => setDeleteTeam(null)} style={btnGhost}>Cancelar</button>
+            <button type="button" onClick={() => borrarEquipo(deleteTeam)} style={btnDanger}>Borrar equipo</button>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ---------- ligas ----------
+
+function LeaguesView({ db, commit, setView, setLigaId, ligaId, setToast }) {
+  const [nombre, setNombre] = useState("");
+  const [editando, setEditando] = useState(null);
+  const [nombreEdit, setNombreEdit] = useState("");
+  const [deleteTarget, setDeleteTarget] = useState(null);
+
+  const crear = () => {
+    const n = nombre.trim();
+    if (!n) return;
+    const id = uid("l");
+    commit((prev) => ({ ...prev, leagues: [...prev.leagues, { id, nombre: n }] }));
+    setNombre("");
+    setLigaId(id);
+    setView({ name: "teams" });
+    setToast("Liga creada. Cargá sus equipos.");
+  };
+
+  const guardarNombre = () => {
+    const n = nombreEdit.trim();
+    if (!n) return;
+    commit((prev) => ({ ...prev, leagues: prev.leagues.map((l) => (l.id === editando ? { ...l, nombre: n } : l)) }));
+    setEditando(null);
+  };
+
+  const borrar = (liga) => {
+    commit((prev) => {
+      const equipos = prev.teams.filter((t) => t.liga_id === liga.id).map((t) => t.id);
+      const jugadores = prev.players.filter((p) => equipos.includes(p.equipo_id)).map((p) => p.id);
+      const partidos = prev.matches.filter((m) => m.liga_id === liga.id).map((m) => m.id);
+      return {
+        ...prev,
+        leagues: prev.leagues.filter((l) => l.id !== liga.id),
+        teams: prev.teams.filter((t) => t.liga_id !== liga.id),
+        players: prev.players.filter((p) => !jugadores.includes(p.id)),
+        matches: prev.matches.filter((m) => !partidos.includes(m.id)),
+        stats: prev.stats.filter((s) => !partidos.includes(s.partido_id) && !jugadores.includes(s.jugador_id)),
+      };
+    });
+    const queda = db.leagues.find((l) => l.id !== liga.id);
+    if (queda) setLigaId(queda.id);
+    setDeleteTarget(null);
+  };
+
+  return (
+    <div style={{ maxWidth: 640 }}>
+      <BackBar onBack={() => setView({ name: "home" })} title="Ligas" />
+      <p style={{ marginBottom: 16, fontSize: 14, color: MUTED }}>
+        Cada liga tiene sus propios equipos, jugadores, partidos y estadísticas. Cambiá de liga desde el selector del menú superior.
+      </p>
+
+      <div style={{ marginBottom: 20, display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <input type="text" value={nombre} onChange={(e) => setNombre(e.target.value)} onKeyDown={(e) => e.key === "Enter" && crear()}
+          placeholder="Nombre de la nueva liga" style={{ ...inputStyle, width: 260, padding: "8px 12px", fontSize: 14 }} />
+        <button type="button" onClick={crear} style={{ ...btnPrimary, display: "flex", alignItems: "center", gap: 6, padding: "8px 14px", fontSize: 14 }}>
+          <Plus size={16} /> Crear liga
+        </button>
+      </div>
+
+      <div style={cardStyle}>
+        {db.leagues.map((l, i) => {
+          const equipos = teamsOf(db, l.id).length;
+          const partidos = matchesOf(db, l.id).length;
+          const activa = l.id === ligaId;
+          return (
+            <div key={l.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "14px 16px", borderBottom: i === db.leagues.length - 1 ? "none" : `1px solid ${LINE}`, background: activa ? "#F7FBFA" : "transparent" }}>
+              {editando === l.id ? (
+                <div style={{ display: "flex", gap: 8, flex: 1 }}>
+                  <input type="text" value={nombreEdit} onChange={(e) => setNombreEdit(e.target.value)} onKeyDown={(e) => e.key === "Enter" && guardarNombre()} style={{ ...inputStyle, padding: "8px 12px", fontSize: 14 }} />
+                  <button type="button" onClick={guardarNombre} style={{ ...btnPrimary, padding: "8px 12px" }}><Check size={16} /></button>
+                  <button type="button" onClick={() => setEditando(null)} style={{ ...btnGhost, padding: "8px 12px" }}><X size={16} /></button>
+                </div>
+              ) : (
+                <>
+                  <div style={{ minWidth: 0 }}>
+                    <p style={{ fontWeight: 700, display: "flex", alignItems: "center", gap: 8 }}>
+                      {l.nombre}
+                      {activa && <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", background: `${GREEN}22`, color: GREEN, padding: "2px 6px", borderRadius: 4 }}>Activa</span>}
+                    </p>
+                    <p style={{ fontSize: 12, color: MUTED }}>{equipos} equipo{equipos === 1 ? "" : "s"} · {partidos} partido{partidos === 1 ? "" : "s"}</p>
+                  </div>
+                  <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                    {!activa && <button type="button" onClick={() => { setLigaId(l.id); setView({ name: "home" }); }} style={{ ...btnGhost, fontSize: 13, padding: "6px 12px" }}>Usar</button>}
+                    <button type="button" onClick={() => { setEditando(l.id); setNombreEdit(l.nombre); }} style={{ borderRadius: 6, padding: 8, background: "transparent", border: "none", cursor: "pointer" }}><Pencil size={16} /></button>
+                    {db.leagues.length > 1 && <button type="button" onClick={() => setDeleteTarget(l)} style={{ borderRadius: 6, padding: 8, background: "transparent", border: "none", cursor: "pointer" }}><Trash2 size={16} color={RED} /></button>}
+                  </div>
+                </>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {deleteTarget && (
+        <Modal onClose={() => setDeleteTarget(null)}>
+          <h3 style={{ marginBottom: 8, fontSize: 18, fontWeight: 800 }}>¿Borrar liga?</h3>
+          <p style={{ marginBottom: 20, fontSize: 14, color: MUTED }}>
+            Se eliminará <strong>{deleteTarget.nombre}</strong> con todos sus equipos, jugadores, partidos y estadísticas. No se puede deshacer.
+          </p>
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+            <button type="button" onClick={() => setDeleteTarget(null)} style={btnGhost}>Cancelar</button>
+            <button type="button" onClick={() => borrar(deleteTarget)} style={btnDanger}>Borrar liga</button>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ---------- estadísticas ----------
+
+function StatsView({ db, setView, setToast, ligaId, liga }) {
+  const [teamFilter, setTeamFilter] = useState("todos");
+  const [playerFilter, setPlayerFilter] = useState("todos");
+  const [seasonFilter, setSeasonFilter] = useState("todas");
+
+  const partidosLiga = matchesOf(db, ligaId);
+  const equipos = teamsOf(db, ligaId);
+
+  const seasons = useMemo(() => {
+    const years = new Set(partidosLiga.map((m) => m.fecha?.slice(0, 4)).filter(Boolean));
+    return Array.from(years).sort().reverse();
+  }, [partidosLiga]);
+
+  const finalizedMatches = partidosLiga.filter((m) => m.estado === "finalizado");
+
+  const rows = useMemo(() => {
+    const byPlayer = new Map();
+    for (const match of finalizedMatches) {
+      if (seasonFilter !== "todas" && match.fecha?.slice(0, 4) !== seasonFilter) continue;
+      for (const raw of db.stats.filter((st) => st.partido_id === match.id)) {
+        const player = db.players.find((p) => p.id === raw.jugador_id);
+        if (!player) continue;
+        if (teamFilter !== "todos" && player.equipo_id !== teamFilter) continue;
+        if (playerFilter !== "todos" && player.id !== playerFilter) continue;
+        const s = readStat(raw);
+        if (!byPlayer.has(player.id)) {
+          byPlayer.set(player.id, { player, partidos: 0, ...Object.fromEntries(STAT_FIELDS.map((f) => [f.key, 0])) });
+        }
+        const agg = byPlayer.get(player.id);
+        agg.partidos += 1;
+        STAT_FIELDS.forEach((f) => { agg[f.key] += s[f.key]; });
+      }
+    }
+    return Array.from(byPlayer.values()).sort((a, b) => b.puntos - a.puntos);
+  }, [db, teamFilter, playerFilter, seasonFilter, finalizedMatches]);
+
+  const playersForFilter = db.players.filter((p) => {
+    const t = db.teams.find((tt) => tt.id === p.equipo_id);
+    if (!t || t.liga_id !== ligaId) return false;
+    return teamFilter === "todos" || p.equipo_id === teamFilter;
+  });
+
+  const selectStyle = { borderRadius: 8, border: `1px solid ${LINE}`, background: "white", padding: "8px 12px", fontSize: 14, outline: "none" };
+  const num = (n) => String(n).replace(".", ",");
+
+  const exportarAcumuladas = () => {
+    if (rows.length === 0) { setToast("No hay datos para exportar."); return; }
+    const filas = [[
+      "Liga", "Jugador", "Nº", "Equipo", "PJ",
+      ...STAT_FIELDS.map((f) => f.label), "% Efectividad",
+      ...STAT_FIELDS.map((f) => `Prom. ${f.label.toLowerCase()}`),
+    ]];
+    rows.forEach((r) => filas.push([
+      liga.nombre, r.player.nombre, r.player.numero, teamName(db, r.player.equipo_id), r.partidos,
+      ...STAT_FIELDS.map((f) => r[f.key]),
+      num(efectividad(r.puntos, r.tiros).toFixed(1)),
+      ...STAT_FIELDS.map((f) => num((r[f.key] / r.partidos).toFixed(1))),
+    ]));
+    descargarCSV("korfball-estadisticas-acumuladas.csv", filas);
+    setToast("Archivo descargado. Se abre directo en Excel.");
+  };
+
+  const exportarPartidoPorPartido = () => {
+    const filas = [[
+      "Liga", "Fecha", "Hora", "Lugar", "Equipo local", "Equipo visitante", "Resultado", "Estado",
+      "Jugador", "Nº", "Equipo del jugador", ...STAT_FIELDS.map((f) => f.label), "% Efectividad",
+    ]];
+    const ordenados = [...partidosLiga].sort((a, b) => (a.fecha + (a.hora || "")).localeCompare(b.fecha + (b.hora || "")));
+    for (const m of ordenados) {
+      if (seasonFilter !== "todas" && m.fecha?.slice(0, 4) !== seasonFilter) continue;
+      const sa = matchScore(db, m.id, m.equipo_a_id);
+      const sb = matchScore(db, m.id, m.equipo_b_id);
+      for (const raw of db.stats.filter((st) => st.partido_id === m.id)) {
+        const p = db.players.find((pl) => pl.id === raw.jugador_id);
+        if (!p) continue;
+        if (teamFilter !== "todos" && p.equipo_id !== teamFilter) continue;
+        if (playerFilter !== "todos" && p.id !== playerFilter) continue;
+        const s = readStat(raw);
+        filas.push([
+          liga.nombre, fmtFecha(m.fecha), m.hora || "", m.lugar || "",
+          teamName(db, m.equipo_a_id), teamName(db, m.equipo_b_id), `${sa}-${sb}`,
+          m.estado === "finalizado" ? "Finalizado" : "En curso",
+          p.nombre, p.numero, teamName(db, p.equipo_id),
+          ...STAT_FIELDS.map((f) => s[f.key]),
+          num(efectividad(s.puntos, s.tiros).toFixed(1)),
+        ]);
+      }
+    }
+    if (filas.length === 1) { setToast("No hay datos para exportar."); return; }
+    descargarCSV("korfball-partido-por-partido.csv", filas);
+    setToast("Archivo descargado. Se abre directo en Excel.");
+  };
+
+  return (
+    <div>
+      <BackBar onBack={() => setView({ name: "home" })} title={`Estadísticas · ${liga.nombre}`} />
+
+      <div style={{ marginBottom: 12, display: "flex", flexWrap: "wrap", gap: 8 }}>
+        <select value={teamFilter} onChange={(e) => { setTeamFilter(e.target.value); setPlayerFilter("todos"); }} style={selectStyle}>
+          <option value="todos">Todos los equipos</option>
+          {equipos.map((t) => <option key={t.id} value={t.id}>{t.nombre}</option>)}
+        </select>
+        <select value={playerFilter} onChange={(e) => setPlayerFilter(e.target.value)} style={selectStyle}>
+          <option value="todos">Todos los jugadores</option>
+          {playersForFilter.map((p) => <option key={p.id} value={p.id}>{p.nombre}</option>)}
+        </select>
+        <select value={seasonFilter} onChange={(e) => setSeasonFilter(e.target.value)} style={selectStyle}>
+          <option value="todas">Todas las temporadas</option>
+          {seasons.map((y) => <option key={y} value={y}>{y}</option>)}
+        </select>
+      </div>
+
+      <div style={{ marginBottom: 20, display: "flex", flexWrap: "wrap", gap: 8 }}>
+        <button type="button" onClick={exportarAcumuladas} style={{ display: "flex", alignItems: "center", gap: 6, borderRadius: 8, padding: "8px 14px", fontSize: 14, fontWeight: 700, color: "white", background: GREEN, border: "none", cursor: "pointer" }}>
+          <Download size={16} /> Exportar acumuladas a Excel
+        </button>
+        <button type="button" onClick={exportarPartidoPorPartido} style={{ display: "flex", alignItems: "center", gap: 6, borderRadius: 8, padding: "8px 14px", fontSize: 14, fontWeight: 600, background: CARD, border: `1px solid ${LINE}`, cursor: "pointer" }}>
+          <Download size={16} /> Exportar partido por partido
+        </button>
+      </div>
+
+      {finalizedMatches.length === 0 ? (
+        <EmptyState text="Todavía no hay partidos finalizados en esta liga." />
+      ) : rows.length === 0 ? (
+        <EmptyState text="No hay datos para los filtros seleccionados." />
+      ) : (
+        <div style={{ ...cardStyle, overflowX: "auto" }}>
+          <table style={{ width: "100%", minWidth: 940, fontSize: 14, borderCollapse: "collapse" }}>
+            <thead>
+              <tr style={{ borderBottom: `1px solid ${LINE}`, textAlign: "left", fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.03em", color: FAINT }}>
+                <th style={{ padding: "12px 16px" }}>Jugador</th>
+                <th style={{ padding: "12px 16px" }}>Equipo</th>
+                <th style={{ padding: 10, textAlign: "center" }}>PJ</th>
+                {STAT_FIELDS.map((f) => <th key={f.key} style={{ padding: 10, textAlign: "center" }}>{f.short}</th>)}
+                <th style={{ padding: 10, textAlign: "center" }}>% Efect.</th>
+                {STAT_FIELDS.map((f) => <th key={`p-${f.key}`} style={{ padding: 10, textAlign: "center" }}>{f.short}/P</th>)}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r, i) => (
+                <tr key={r.player.id} style={{ borderBottom: i === rows.length - 1 ? "none" : `1px solid ${LINE}` }}>
+                  <td style={{ padding: "10px 16px", fontWeight: 600 }}>{r.player.nombre}</td>
+                  <td style={{ padding: "10px 16px", color: MUTED }}>{teamName(db, r.player.equipo_id)}</td>
+                  <td style={{ padding: 10, textAlign: "center", fontFamily: "monospace" }}>{r.partidos}</td>
+                  {STAT_FIELDS.map((f) => (
+                    <td key={f.key} style={{ padding: 10, textAlign: "center", fontFamily: "monospace", fontWeight: f.key === "puntos" ? 700 : 400 }}>{r[f.key]}</td>
+                  ))}
+                  <td style={{ padding: 10, textAlign: "center", fontFamily: "monospace", fontWeight: 700, color: r.tiros > 0 ? GREEN : FAINT }}>
+                    {r.tiros > 0 ? `${efectividad(r.puntos, r.tiros).toFixed(0)}%` : "—"}
+                  </td>
+                  {STAT_FIELDS.map((f) => (
+                    <td key={`p-${f.key}`} style={{ padding: 10, textAlign: "center", fontFamily: "monospace", color: MUTED }}>{(r[f.key] / r.partidos).toFixed(1)}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <p style={{ marginTop: 8, fontSize: 12, color: FAINT }}>
+        Las columnas con "/P" son promedios por partido. La efectividad es goles sobre tiros intentados. Los archivos exportados respetan los filtros aplicados.
+      </p>
+    </div>
+  );
+}
