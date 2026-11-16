@@ -6,7 +6,6 @@ import {
 } from "lucide-react";
 import { loadDb, saveDiff } from "./lib/syncDb";
 
-
 // ============================================================
 // CONFIGURACIÓN DE ESTADÍSTICAS
 // Para agregar una métrica nueva en el futuro alcanza con sumar
@@ -197,9 +196,9 @@ export default function App({ canEdit = false, userEmail = null, onLogin, onLogo
   const ctx = { db, commit, setView, setToast, liga, ligaId: liga.id, canEdit };
 
   return (
-    <div style={{ background: PAPER, minHeight: 600, color: "#10151C" }} className="font-sans">
+    <div style={{ background: PAPER, minHeight: "100dvh", color: "#10151C" }} className="font-sans">
       <TopNav view={view} setView={setView} saveState={saveState} db={db} liga={liga} setLigaId={setLigaId} canEdit={canEdit} userEmail={userEmail} onLogin={onLogin} onLogout={onLogout} />
-      <main style={{ maxWidth: 1000, margin: "0 auto", padding: "16px 16px 64px" }}>
+      <main className="app-main" style={{ maxWidth: 1000, margin: "0 auto", padding: "16px 16px 64px" }}>
         {view.name === "home" && <HomeView {...ctx} />}
         {view.name === "new" && <NewMatchView {...ctx} />}
         {view.name === "matches" && <MatchesView {...ctx} />}
@@ -209,7 +208,7 @@ export default function App({ canEdit = false, userEmail = null, onLogin, onLogo
         {view.name === "leagues" && <LeaguesView {...ctx} setLigaId={setLigaId} />}
       </main>
       {toast && (
-        <div style={{ position: "fixed", left: 0, right: 0, bottom: 16, display: "flex", justifyContent: "center", padding: "0 16px", zIndex: 50 }}>
+        <div className="app-toast" style={{ position: "fixed", left: 0, right: 0, bottom: 16, display: "flex", justifyContent: "center", padding: "0 16px", zIndex: 50 }}>
           <div style={{ borderRadius: 8, background: "#10151C", padding: "10px 16px", fontSize: 14, color: "white", boxShadow: "0 4px 12px rgba(0,0,0,0.2)" }}>{toast}</div>
         </div>
       )}
@@ -232,42 +231,57 @@ function SaveIndicator({ saveState }) {
 
 function TopNav({ view, setView, saveState, db, liga, setLigaId, canEdit, userEmail, onLogin, onLogout }) {
   const items = [
-    { name: "home", label: "Inicio", icon: Home },
-    { name: "new", label: "Nuevo partido", icon: Plus },
-    { name: "matches", label: "Partidos", icon: ListChecks },
-    { name: "teams", label: "Equipos", icon: Users },
-    { name: "stats", label: "Estadísticas", icon: BarChart3 },
-    { name: "leagues", label: "Ligas", icon: Shield },
+    { name: "home", label: "Inicio", icon: Home, short: "Inicio" },
+    { name: "new", label: "Nuevo partido", icon: Plus, short: "Nuevo" },
+    { name: "matches", label: "Partidos", icon: ListChecks, short: "Partidos" },
+    { name: "teams", label: "Equipos", icon: Users, short: "Equipos" },
+    { name: "stats", label: "Estadísticas", icon: BarChart3, short: "Stats" },
+    { name: "leagues", label: "Ligas", icon: Shield, short: "Ligas" },
   ];
+  const visible = items.filter((it) => canEdit || it.name !== "new");
   return (
-    <header style={{ background: INK, position: "sticky", top: 0, zIndex: 40 }}>
-      <div style={{ maxWidth: 1000, margin: "0 auto", display: "flex", alignItems: "center", gap: 8, padding: "10px 16px", overflowX: "auto" }}>
-        <button type="button" onClick={() => setView({ name: "home" })} style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0, background: "transparent", border: "none", cursor: "pointer" }}>
-          <span style={{ display: "flex", height: 32, width: 32, alignItems: "center", justifyContent: "center", borderRadius: 8, background: GOLD, color: INK, fontWeight: 900, fontSize: 13 }}>LK</span>
-        </button>
-        <select value={liga.id} onChange={(e) => { setLigaId(e.target.value); setView({ name: "home" }); }}
-          style={{ flexShrink: 0, borderRadius: 8, border: `1px solid #2A3A4E`, background: "#16263A", color: "white", padding: "7px 10px", fontSize: 13, fontWeight: 600, maxWidth: 190, cursor: "pointer" }}>
-          {db.leagues.map((l) => <option key={l.id} value={l.id}>{l.nombre}</option>)}
-        </select>
-        <nav style={{ display: "flex", gap: 4, flex: 1 }}>
-          {items.filter((it) => canEdit || it.name !== "new").map((it) => {
-            const active = view.name === it.name;
-            const Icon = it.icon;
-            return (
-              <button type="button" key={it.name} onClick={() => setView({ name: it.name })}
-                style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0, borderRadius: 8, padding: "8px 12px", fontSize: 14, fontWeight: 500, border: "none", cursor: "pointer", background: active ? GOLD : "transparent", color: active ? INK : "#C9D2DB" }}>
-                <Icon size={16} strokeWidth={2.4} /><span>{it.label}</span>
-              </button>
-            );
-          })}
-        </nav>
-        <SaveIndicator saveState={saveState} />
-        <button type="button" onClick={canEdit ? onLogout : onLogin} title={canEdit ? userEmail : "Ingreso de organizadores"}
-          style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0, borderRadius: 8, padding: "8px 12px", fontSize: 13, fontWeight: 600, border: "1px solid #2A3A4E", background: "transparent", color: "#C9D2DB", cursor: "pointer" }}>
-          {canEdit ? <LogOut size={15} /> : <LogIn size={15} />}<span>{canEdit ? "Salir" : "Organizadores"}</span>
-        </button>
-      </div>
-    </header>
+    <>
+      <header style={{ background: INK, position: "sticky", top: 0, zIndex: 40, paddingTop: "env(safe-area-inset-top, 0px)" }}>
+        <div style={{ maxWidth: 1000, margin: "0 auto", display: "flex", alignItems: "center", gap: 8, padding: "10px 16px" }}>
+          <button type="button" onClick={() => setView({ name: "home" })} aria-label="Ir al inicio" style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0, background: "transparent", border: "none", cursor: "pointer" }}>
+            <span style={{ display: "flex", height: 32, width: 32, alignItems: "center", justifyContent: "center", borderRadius: 8, background: GOLD, color: INK, fontWeight: 900, fontSize: 13 }}>LK</span>
+          </button>
+          <select className="liga-select" value={liga.id} onChange={(e) => { setLigaId(e.target.value); setView({ name: "home" }); }}
+            style={{ flexShrink: 0, borderRadius: 8, border: `1px solid #2A3A4E`, background: "#16263A", color: "white", padding: "7px 10px", fontSize: 13, fontWeight: 600, maxWidth: 190, cursor: "pointer" }}>
+            {db.leagues.map((l) => <option key={l.id} value={l.id}>{l.nombre}</option>)}
+          </select>
+          <nav className="nav-desktop" style={{ gap: 4, flex: 1 }}>
+            {visible.map((it) => {
+              const active = view.name === it.name;
+              const Icon = it.icon;
+              return (
+                <button type="button" key={it.name} onClick={() => setView({ name: it.name })}
+                  style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0, borderRadius: 8, padding: "8px 12px", fontSize: 14, fontWeight: 500, border: "none", cursor: "pointer", background: active ? GOLD : "transparent", color: active ? INK : "#C9D2DB" }}>
+                  <Icon size={16} strokeWidth={2.4} /><span>{it.label}</span>
+                </button>
+              );
+            })}
+          </nav>
+          <SaveIndicator saveState={saveState} />
+          <button type="button" onClick={canEdit ? onLogout : onLogin} aria-label={canEdit ? "Cerrar sesión" : "Ingreso de organizadores"} title={canEdit ? userEmail : "Ingreso de organizadores"}
+            style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6, flexShrink: 0, minHeight: 40, minWidth: 40, borderRadius: 8, padding: "8px 12px", fontSize: 13, fontWeight: 600, border: "1px solid #2A3A4E", background: "transparent", color: "#C9D2DB", cursor: "pointer" }}>
+            {canEdit ? <LogOut size={16} /> : <LogIn size={16} />}<span className="hide-mobile">{canEdit ? "Salir" : "Organizadores"}</span>
+          </button>
+        </div>
+      </header>
+      <nav className="nav-bottom" aria-label="Navegación principal" style={{ background: INK }}>
+        {visible.map((it) => {
+          const active = view.name === it.name;
+          const Icon = it.icon;
+          return (
+            <button type="button" key={it.name} onClick={() => setView({ name: it.name })} aria-current={active ? "page" : undefined}
+              style={{ color: active ? GOLD : "#9AA7B2" }}>
+              <Icon size={22} strokeWidth={active ? 2.6 : 2} /><span>{it.short}</span>
+            </button>
+          );
+        })}
+      </nav>
+    </>
   );
 }
 
@@ -336,7 +350,7 @@ function Modal({ children, onClose, wide }) {
 
 // ---------- home ----------
 
-function HomeView({ db, setView, liga, ligaId }) {
+function HomeView({ db, setView, liga, ligaId, canEdit }) {
   const partidos = matchesOf(db, ligaId);
   const enCurso = partidos.filter((m) => m.estado === "en_curso");
   const recientes = [...partidos].sort((a, b) => (b.fecha + (b.hora || "")).localeCompare(a.fecha + (a.hora || ""))).slice(0, 4);
@@ -347,11 +361,13 @@ function HomeView({ db, setView, liga, ligaId }) {
       <section style={{ marginBottom: 32, paddingTop: 16 }}>
         <p style={{ fontSize: 14, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", color: GOLD }}>{liga.nombre}</p>
         <h1 style={{ marginTop: 4, fontSize: 30, fontWeight: 900, letterSpacing: "-0.01em" }}>Estadísticas de partido, en tiempo real.</h1>
-        <p style={{ marginTop: 8, maxWidth: 560, color: MUTED }}>Cargá puntos, asistencias, rebotes, tiros, robos y pérdidas de cada jugador durante el partido.</p>
+        <p style={{ marginTop: 8, maxWidth: 560, color: MUTED }}>{canEdit ? "Cargá puntos, asistencias, rebotes, tiros, robos y pérdidas de cada jugador durante el partido." : "Seguí los partidos, los equipos y las estadísticas de cada jugador de la liga."}</p>
         <div style={{ marginTop: 20, display: "flex", flexWrap: "wrap", gap: 12 }}>
+          {canEdit && (
           <button type="button" onClick={() => setView({ name: "new" })} style={{ ...btnPrimary, display: "flex", alignItems: "center", gap: 8, padding: "12px 20px", borderRadius: 10 }}>
             <Plus size={18} /> Crear nuevo partido
           </button>
+          )}
           <button type="button" onClick={() => setView({ name: "matches" })} style={{ display: "flex", alignItems: "center", gap: 8, borderRadius: 10, padding: "12px 20px", fontWeight: 600, border: `1px solid ${LINE}`, background: CARD, cursor: "pointer" }}>
             <ListChecks size={18} /> Ver partidos
           </button>
@@ -381,7 +397,7 @@ function HomeView({ db, setView, liga, ligaId }) {
         <h2 style={{ marginBottom: 8, fontSize: 13, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", color: MUTED }}>Equipos</h2>
         {equipos.length === 0 ? (
           <EmptyState text="Esta liga no tiene equipos todavía."
-            action={<button type="button" onClick={() => setView({ name: "teams" })} style={{ ...btnPrimary, marginTop: 12, fontSize: 14 }}>Agregar equipos</button>} />
+            action={canEdit ? <button type="button" onClick={() => setView({ name: "teams" })} style={{ ...btnPrimary, marginTop: 12, fontSize: 14 }}>Agregar equipos</button> : null} />
         ) : (
           <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
             {equipos.map((t) => (
@@ -593,7 +609,7 @@ function DeleteMatchModal({ db, match, commit, onClose, afterDelete }) {
 
 // ---------- matches list ----------
 
-function MatchesView({ db, commit, setView, ligaId }) {
+function MatchesView({ db, commit, setView, ligaId, canEdit }) {
   const [filter, setFilter] = useState("todos");
   const [editTarget, setEditTarget] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
@@ -617,7 +633,7 @@ function MatchesView({ db, commit, setView, ligaId }) {
           {list.map((m) => (
             <MatchCard key={m.id} db={db} match={m}
               onClick={() => setView({ name: "match", matchId: m.id })}
-              onEdit={() => setEditTarget(m)} onDelete={() => setDeleteTarget(m)} />
+              onEdit={canEdit ? () => setEditTarget(m) : undefined} onDelete={canEdit ? () => setDeleteTarget(m) : undefined} />
           ))}
         </div>
       )}
@@ -629,7 +645,7 @@ function MatchesView({ db, commit, setView, ligaId }) {
 
 // ---------- live match ----------
 
-function MatchView({ db, commit, matchId, setView }) {
+function MatchView({ db, commit, matchId, setView, canEdit }) {
   const match = db.matches.find((m) => m.id === matchId);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
@@ -688,13 +704,13 @@ function MatchView({ db, commit, matchId, setView }) {
         right={
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <span style={{ borderRadius: 9999, padding: "4px 12px", fontSize: 12, fontWeight: 700, background: finalized ? "#E9EEF0" : `${GOLD}33`, color: finalized ? MUTED : "#8A6410" }}>{finalized ? "Finalizado" : "En curso"}</span>
-            {finalized && (
+            {canEdit && finalized && (
               <button type="button" onClick={reabrir} title="Reabrir para editar estadísticas" style={{ display: "flex", alignItems: "center", gap: 6, borderRadius: 6, padding: "8px 10px", fontSize: 12, fontWeight: 700, color: INK, background: `${GOLD}33`, border: "none", cursor: "pointer" }}>
                 <Unlock size={14} /> Editar estadísticas
               </button>
             )}
-            <button type="button" onClick={() => setEditOpen(true)} title="Editar datos del partido" style={{ borderRadius: 6, padding: 8, background: CHIP, border: "none", cursor: "pointer" }}><Pencil size={16} /></button>
-            <button type="button" onClick={() => setDeleteOpen(true)} title="Borrar partido" style={{ borderRadius: 6, padding: 8, background: "transparent", border: `1px solid ${LINE}`, cursor: "pointer" }}><Trash2 size={16} color={RED} /></button>
+            {canEdit && <button type="button" onClick={() => setEditOpen(true)} title="Editar datos del partido" style={{ borderRadius: 6, padding: 8, background: CHIP, border: "none", cursor: "pointer" }}><Pencil size={16} /></button>}
+            {canEdit && <button type="button" onClick={() => setDeleteOpen(true)} title="Borrar partido" style={{ borderRadius: 6, padding: 8, background: "transparent", border: `1px solid ${LINE}`, cursor: "pointer" }}><Trash2 size={16} color={RED} /></button>}
           </div>
         } />
 
@@ -715,12 +731,12 @@ function MatchView({ db, commit, matchId, setView }) {
       </div>
 
       <div className="grid gap-6 lg:grid-cols-2">
-        <TeamStatsPanel db={db} teamId={match.equipo_a_id} getStat={getStat} bump={bump} finalized={finalized} color={COLOR_A} setView={setView} />
-        <TeamStatsPanel db={db} teamId={match.equipo_b_id} getStat={getStat} bump={bump} finalized={finalized} color={COLOR_B} setView={setView} />
+        <TeamStatsPanel db={db} teamId={match.equipo_a_id} getStat={getStat} bump={bump} finalized={finalized || !canEdit} color={COLOR_A} setView={setView} />
+        <TeamStatsPanel db={db} teamId={match.equipo_b_id} getStat={getStat} bump={bump} finalized={finalized || !canEdit} color={COLOR_B} setView={setView} />
       </div>
 
       <div style={{ marginTop: 32, display: "flex", justifyContent: "center" }}>
-        {finalized ? (
+        {!canEdit ? null : finalized ? (
           <button type="button" onClick={reabrir} style={{ display: "flex", alignItems: "center", gap: 8, borderRadius: 12, padding: "12px 20px", fontSize: 15, fontWeight: 700, color: INK, background: CHIP, border: `1px solid ${LINE}`, cursor: "pointer" }}>
             <Unlock size={18} /> Reabrir para corregir estadísticas
           </button>
@@ -831,7 +847,7 @@ function PlayerStatRow({ player, stat, bump, finalized, color, isLast }) {
 
 // ---------- teams / players ----------
 
-function TeamsView({ db, commit, setView, teamId, ligaId, liga }) {
+function TeamsView({ db, commit, setView, teamId, ligaId, liga, canEdit }) {
   const equipos = teamsOf(db, ligaId);
   const selected = equipos.find((t) => t.id === teamId) || equipos[0] || null;
   const [form, setForm] = useState({ nombre: "", numero: "" });
@@ -901,6 +917,7 @@ function TeamsView({ db, commit, setView, teamId, ligaId, liga }) {
         ))}
       </div>
 
+      {canEdit && (
       <div style={{ marginBottom: 20, display: "flex", gap: 8, flexWrap: "wrap" }}>
         <input type="text" value={nuevoEquipo} onChange={(e) => setNuevoEquipo(e.target.value)} onKeyDown={(e) => e.key === "Enter" && agregarEquipo()}
           placeholder="Nombre del nuevo equipo" style={{ ...inputStyle, width: 240, padding: "8px 12px", fontSize: 14 }} />
@@ -913,6 +930,7 @@ function TeamsView({ db, commit, setView, teamId, ligaId, liga }) {
           </button>
         )}
       </div>
+      )}
 
       {!selected ? (
         <EmptyState text="Esta liga todavía no tiene equipos. Agregá el primero arriba." />
@@ -930,16 +948,19 @@ function TeamsView({ db, commit, setView, teamId, ligaId, liga }) {
                       <span style={{ display: "flex", height: 28, width: 28, flexShrink: 0, alignItems: "center", justifyContent: "center", borderRadius: 6, background: CHIP, fontFamily: "monospace", fontSize: 12, fontWeight: 700 }}>{p.numero}</span>
                       <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: 600 }}>{p.nombre}</span>
                     </div>
+                    {canEdit && (
                     <div style={{ display: "flex", flexShrink: 0, gap: 4 }}>
                       <button type="button" onClick={() => { setEditingId(p.id); setForm({ nombre: p.nombre, numero: String(p.numero) }); }} aria-label="Editar" style={{ borderRadius: 6, padding: 8, background: "transparent", border: "none", cursor: "pointer" }}><Pencil size={16} /></button>
                       <button type="button" onClick={() => setDeleteTarget(p)} aria-label="Eliminar" style={{ borderRadius: 6, padding: 8, background: "transparent", border: "none", cursor: "pointer" }}><Trash2 size={16} color={RED} /></button>
                     </div>
+                    )}
                   </div>
                 ))}
               </div>
             )}
           </div>
 
+          {canEdit && (
           <div style={{ ...cardStyle, padding: 16, width: "100%" }} className="lg:w-80 lg:shrink-0">
             <h3 style={{ marginBottom: 12, fontWeight: 800 }}>{editingId ? "Editar jugador" : "Agregar jugador"}</h3>
             <div style={{ marginBottom: 12 }}>
@@ -958,6 +979,7 @@ function TeamsView({ db, commit, setView, teamId, ligaId, liga }) {
               {editingId && <button type="button" onClick={resetForm} style={{ ...btnGhost, padding: "10px 12px" }}><X size={16} /></button>}
             </div>
           </div>
+          )}
         </div>
       )}
 
@@ -990,7 +1012,7 @@ function TeamsView({ db, commit, setView, teamId, ligaId, liga }) {
 
 // ---------- ligas ----------
 
-function LeaguesView({ db, commit, setView, setLigaId, ligaId, setToast }) {
+function LeaguesView({ db, commit, setView, setLigaId, ligaId, setToast, canEdit }) {
   const [nombre, setNombre] = useState("");
   const [editando, setEditando] = useState(null);
   const [nombreEdit, setNombreEdit] = useState("");
@@ -1040,6 +1062,7 @@ function LeaguesView({ db, commit, setView, setLigaId, ligaId, setToast }) {
         Cada liga tiene sus propios equipos, jugadores, partidos y estadísticas. Cambiá de liga desde el selector del menú superior.
       </p>
 
+      {canEdit && (
       <div style={{ marginBottom: 20, display: "flex", gap: 8, flexWrap: "wrap" }}>
         <input type="text" value={nombre} onChange={(e) => setNombre(e.target.value)} onKeyDown={(e) => e.key === "Enter" && crear()}
           placeholder="Nombre de la nueva liga" style={{ ...inputStyle, width: 260, padding: "8px 12px", fontSize: 14 }} />
@@ -1047,6 +1070,7 @@ function LeaguesView({ db, commit, setView, setLigaId, ligaId, setToast }) {
           <Plus size={16} /> Crear liga
         </button>
       </div>
+      )}
 
       <div style={cardStyle}>
         {db.leagues.map((l, i) => {
@@ -1072,8 +1096,8 @@ function LeaguesView({ db, commit, setView, setLigaId, ligaId, setToast }) {
                   </div>
                   <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
                     {!activa && <button type="button" onClick={() => { setLigaId(l.id); setView({ name: "home" }); }} style={{ ...btnGhost, fontSize: 13, padding: "6px 12px" }}>Usar</button>}
-                    <button type="button" onClick={() => { setEditando(l.id); setNombreEdit(l.nombre); }} style={{ borderRadius: 6, padding: 8, background: "transparent", border: "none", cursor: "pointer" }}><Pencil size={16} /></button>
-                    {db.leagues.length > 1 && <button type="button" onClick={() => setDeleteTarget(l)} style={{ borderRadius: 6, padding: 8, background: "transparent", border: "none", cursor: "pointer" }}><Trash2 size={16} color={RED} /></button>}
+                    {canEdit && <button type="button" onClick={() => { setEditando(l.id); setNombreEdit(l.nombre); }} style={{ borderRadius: 6, padding: 8, background: "transparent", border: "none", cursor: "pointer" }}><Pencil size={16} /></button>}
+                    {canEdit && db.leagues.length > 1 && <button type="button" onClick={() => setDeleteTarget(l)} style={{ borderRadius: 6, padding: 8, background: "transparent", border: "none", cursor: "pointer" }}><Trash2 size={16} color={RED} /></button>}
                   </div>
                 </>
               )}
