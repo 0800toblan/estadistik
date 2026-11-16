@@ -1,6 +1,7 @@
 <div align="center">
 
-# 🏐 Liga de Korfball
+# Estadistik
+# A WEB APP for organizing a Korfball League
 
 ### Estadísticas, partidos y equipos de la liga, en una web que se ve bien en el celu y en la compu.
 
