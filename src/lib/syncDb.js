@@ -15,12 +15,20 @@ const pick = (row, cols) => Object.fromEntries(cols.map((c) => [c, row[c] ?? nul
 const same = (a, b) => !!b && Object.keys(a).every((k) => a[k] === b[k]);
 
 // Carga todo en la misma forma que usaba la app: { leagues, teams, players, matches, stats }
+// Supabase corta cada respuesta en 1000 filas, así que se lee por páginas hasta traer todo.
+const PAGE = 1000;
 export async function loadDb() {
   const out = {};
   for (const t of TABLES) {
-    const { data, error } = await supabase.from(t).select(COLUMNS[t].join(",")).limit(10000);
-    if (error) throw error;
-    out[t] = data;
+    const rows = [];
+    for (let from = 0; ; from += PAGE) {
+      const { data, error } = await supabase
+        .from(t).select(COLUMNS[t].join(",")).order("id").range(from, from + PAGE - 1);
+      if (error) throw error;
+      rows.push(...data);
+      if (data.length < PAGE) break;
+    }
+    out[t] = rows;
   }
   return out;
 }
@@ -32,8 +40,8 @@ export async function saveDiff(prev, next) {
   for (const t of TABLES) {
     const old = new Map((before[t] || []).map((r) => [r.id, pick(r, COLUMNS[t])]));
     const changed = (next[t] || []).map((r) => pick(r, COLUMNS[t])).filter((r) => !same(r, old.get(r.id)));
-    if (changed.length) {
-      const { error } = await supabase.from(t).upsert(changed);
+    for (let i = 0; i < changed.length; i += 500) {
+      const { error } = await supabase.from(t).upsert(changed.slice(i, i + 500));
       if (error) throw error;
     }
   }
