@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import App from "./App";
 import { useAuth } from "./lib/useAuth";
+import { Analytics } from "@vercel/analytics/react";
 
 export default function Root() {
   const { session, isOrganizer, checking, signIn, signOut } = useAuth();
@@ -25,6 +26,7 @@ export default function Root() {
   return (
     <>
       <App canEdit={isOrganizer} userEmail={session?.user?.email} onLogin={() => setShowLogin(true)} onLogout={signOut} />
+      <Analytics />
       {showLogin && (
         <div className="fixed inset-0 z-[60] flex items-end justify-center bg-black/50 p-4 sm:items-center" onClick={() => setShowLogin(false)}>
           <div className="w-full max-w-sm rounded-xl bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>

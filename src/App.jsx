@@ -6,6 +6,7 @@ import {
 } from "lucide-react";
 import { loadDb, saveDiff } from "./lib/syncDb";
 
+
 // ============================================================
 // CONFIGURACIÓN DE ESTADÍSTICAS
 // Para agregar una métrica nueva en el futuro alcanza con sumar
