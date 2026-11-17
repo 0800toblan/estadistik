@@ -55,3 +55,16 @@ body { margin: 0; background: #F4F6F5; -webkit-text-size-adjust: 100%; }
   .stats-filters select { flex: 1 1 100%; min-height: 44px; font-size: 16px; }
   .stats-export button { flex: 1 1 100%; justify-content: center; min-height: 44px; }
 }
+
+/* ---- Partido en vivo ---- */
+.team-tabs { display: flex; gap: 8px; margin-bottom: 12px; }
+@media (min-width: 1024px) {
+  .team-tabs { display: none; }
+}
+@media (max-width: 1023px) {
+  .team-panel[data-active="false"] { display: none; }
+}
+@media (max-width: 767px) {
+  /* El marcador queda fijo arriba mientras se cargan las acciones */
+  .live-scoreboard { position: sticky; top: calc(52px + env(safe-area-inset-top, 0px)); z-index: 30; margin-bottom: 12px !important; }
+}

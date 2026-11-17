@@ -5,13 +5,15 @@ import { supabase } from "./supabase";
 const COLUMNS = {
   leagues: ["id", "nombre"],
   teams: ["id", "liga_id", "nombre"],
-  players: ["id", "equipo_id", "nombre", "numero"],
-  matches: ["id", "liga_id", "equipo_a_id", "equipo_b_id", "fecha", "hora", "lugar", "estado", "resultado_equipo_a", "resultado_equipo_b"],
-  stats: ["id", "partido_id", "jugador_id", "dorsal", "puntos", "asistencias", "rebotes", "tiros", "robos", "perdidas"],
+  players: ["id", "equipo_id", "nombre", "numero", "sexo"],
+  matches: ["id", "liga_id", "equipo_a_id", "equipo_b_id", "fecha", "hora", "lugar", "estado", "resultado_equipo_a", "resultado_equipo_b", "cambios_a", "cambios_b"],
+  stats: ["id", "partido_id", "jugador_id", "dorsal", "en_cancha", "zona", "puntos", "asistencias", "rebotes", "tiros", "robos", "perdidas", "free_pass", "penales", "amarillas", "rojas"],
 };
 const TABLES = Object.keys(COLUMNS); // orden: padres primero
 
-const pick = (row, cols) => Object.fromEntries(cols.map((c) => [c, row[c] ?? null]));
+// Valores por defecto de las columnas que no aceptan null.
+const DEFAULTS = { cambios_a: 0, cambios_b: 0, en_cancha: false, free_pass: 0, penales: 0, amarillas: 0, rojas: 0 };
+const pick = (row, cols) => Object.fromEntries(cols.map((c) => [c, row[c] ?? DEFAULTS[c] ?? null]));
 const same = (a, b) => !!b && Object.keys(a).every((k) => a[k] === b[k]);
 
 // Carga todo en la misma forma que usaba la app: { leagues, teams, players, matches, stats }
@@ -23,9 +25,9 @@ export async function loadDb() {
     const rows = [];
     for (let from = 0; ; from += PAGE) {
       const { data, error } = await supabase
-        .from(t).select(COLUMNS[t].join(",")).order("id").range(from, from + PAGE - 1);
+        .from(t).select("*").order("id").range(from, from + PAGE - 1);
       if (error) throw error;
-      rows.push(...data);
+      rows.push(...data.map((r) => pick(r, COLUMNS[t])));
       if (data.length < PAGE) break;
     }
     out[t] = rows;

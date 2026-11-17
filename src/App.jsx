@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from "react"
 import {
   Home, Plus, ListChecks, Users, BarChart3, ChevronLeft, Check,
   Pencil, Trash2, X, MapPin, Calendar, Trophy, Minus, Download, Unlock,
-  Cloud, CloudOff, Shield, LogIn, LogOut, Menu as MenuIcon
+  Cloud, CloudOff, Shield, LogIn, LogOut, Loader2, ArrowUpDown, Repeat, Menu as MenuIcon
 } from "lucide-react";
 import { loadDb, saveDiff } from "./lib/syncDb";
 
@@ -19,6 +19,23 @@ const STAT_FIELDS = [
   { key: "robos", label: "Robos", short: "Robos" },
   { key: "perdidas", label: "Pérdidas", short: "Pérd." },
 ];
+
+// Reglas del partido en vivo (cambiá estos números si tu liga juega distinto).
+const EN_CANCHA = 8;      // jugadores en cancha por equipo (4 en ataque + 4 en defensa)
+const POR_ZONA = 4;       // jugadores por zona
+const POR_SEXO = 2;       // por zona: 2 varones y 2 mujeres
+const MAX_CAMBIOS = 8;    // cambios permitidos por equipo
+const SEXO = { varon: { sim: "♂", color: "#2B6CB0", nombre: "Varón" }, mujer: { sim: "♀", color: "#C2185B", nombre: "Mujer" } };
+
+// A qué zona va un jugador que entra a un lugar libre: la que tenga lugar para su sexo.
+const elegirZona = (enCancha, sexo) => {
+  const cuenta = (z, sx) => enCancha.filter((x) => x.zona === z && (!sx || x.sexo === sx)).length;
+  const hayLugar = (z) => cuenta(z) < POR_ZONA && (!sexo || cuenta(z, sexo) < POR_SEXO);
+  if (hayLugar("ataque")) return "ataque";
+  if (hayLugar("defensa")) return "defensa";
+  return cuenta("ataque") <= cuenta("defensa") ? "ataque" : "defensa";
+};
+const EXTRA_FIELDS = ["free_pass", "penales", "amarillas", "rojas"]; // faltas y tarjetas
 
 const TEAM_SEED = [
   "La Patriada A", "La Patriada B", "Escorpiones",
@@ -60,16 +77,18 @@ const btnDanger = { borderRadius: 8, padding: "8px 16px", fontWeight: 700, color
 const uid = () => crypto.randomUUID();
 
 const emptyStat = (partidoId, jugadorId) => {
-  const s = { id: uid("s"), partido_id: partidoId, jugador_id: jugadorId, dorsal: null };
+  const s = { id: uid("s"), partido_id: partidoId, jugador_id: jugadorId, dorsal: null, en_cancha: false, zona: null };
   STAT_FIELDS.forEach((f) => { s[f.key] = 0; });
+  EXTRA_FIELDS.forEach((k) => { s[k] = 0; });
   return s;
 };
 
 // Normaliza estadísticas viejas que no tengan los campos nuevos.
 const readStat = (s) => {
-  if (!s) { const e = {}; STAT_FIELDS.forEach((f) => { e[f.key] = 0; }); return e; }
-  const out = { ...s };
+  if (!s) { const e = { en_cancha: false, zona: null }; STAT_FIELDS.forEach((f) => { e[f.key] = 0; }); EXTRA_FIELDS.forEach((k) => { e[k] = 0; }); return e; }
+  const out = { ...s, en_cancha: !!s.en_cancha, zona: s.zona ?? null };
   STAT_FIELDS.forEach((f) => { if (typeof out[f.key] !== "number") out[f.key] = 0; });
+  EXTRA_FIELDS.forEach((k) => { if (typeof out[k] !== "number") out[k] = 0; });
   if (typeof s.tiros !== "number") out.tiros = s.puntos || 0; // partidos previos a la métrica de tiros
   return out;
 };
@@ -108,6 +127,7 @@ const migrate = (db) => {
 export default function App({ canEdit = false, userEmail = null, onLogin, onLogout }) {
   const [db, setDb] = useState(null);
   const [status, setStatus] = useState("loading");
+  const [loadError, setLoadError] = useState("");
   const [view, setView] = useState({ name: "home" });
   const [toast, setToast] = useState(null);
   const [saveState, setSaveState] = useState("idle");
@@ -123,7 +143,7 @@ export default function App({ canEdit = false, userEmail = null, onLogin, onLogo
     let cancelled = false;
     (async () => {
       let raw = null;
-      try { raw = await loadDb(); } catch (e) { console.error(e); }
+      try { raw = await loadDb(); } catch (e) { console.error(e); setLoadError(e?.message || String(e)); }
       if (cancelled) return;
       if (!raw) { setStatus("error"); return; }
       syncedRef.current = raw;
@@ -220,7 +240,11 @@ export default function App({ canEdit = false, userEmail = null, onLogin, onLogo
   if (status === "error") {
     return (
       <div style={{ background: INK, minHeight: 400, display: "flex", alignItems: "center", justifyContent: "center", padding: 40 }}>
-        <p style={{ fontSize: 14, color: "#C9D2DB", textAlign: "center" }}>No se pudieron cargar los datos. Revisá tu conexión y recargá la página.</p>
+        <div style={{ maxWidth: 480, textAlign: "center" }}>
+          <p style={{ fontSize: 14, color: "#C9D2DB" }}>No se pudieron cargar los datos. Revisá tu conexión y recargá la página.</p>
+          {loadError && <p style={{ marginTop: 12, fontFamily: "monospace", fontSize: 12, color: "#F0A8A0", wordBreak: "break-word" }}>Detalle técnico: {loadError}</p>}
+          {/column|schema cache|does not exist/i.test(loadError) && <p style={{ marginTop: 8, fontSize: 13, color: "#C9D2DB" }}>Parece que falta ejecutar una migración SQL en Supabase.</p>}
+        </div>
       </div>
     );
   }
@@ -272,19 +296,6 @@ export default function App({ canEdit = false, userEmail = null, onLogin, onLogo
 
 // ---------- nav ----------
 
-function SaveIndicator({ saveState }) {
-  if (saveState === "idle") return null;
-  const error = saveState === "error";
-  const saved = saveState === "saved";
-  const Icon = error ? CloudOff : saved ? Check : Cloud;
-  const text = error ? "Sin guardar" : saved ? "Guardado" : "Guardando…";
-  return (
-    <span role="status" style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0, fontSize: 11, fontWeight: 600, color: error ? "#F0A8A0" : saved ? "#7FD6B0" : "#9AA7B2" }}>
-      <Icon size={14} /><span className="hide-mobile">{text}</span>
-    </span>
-  );
-}
-
 function TopNav({ view, setView, saveState, db, liga, setLigaId, canEdit, userEmail, onLogin, onLogout }) {
   const items = [
     { name: "home", label: "Inicio", icon: Home },
@@ -297,6 +308,23 @@ function TopNav({ view, setView, saveState, db, liga, setLigaId, canEdit, userEm
   const visible = items.filter((it) => canEdit || it.name !== "new");
   const titles = { home: "Inicio", new: "Nuevo partido", matches: "Partidos", match: "Partido", teams: "Equipos", stats: "Estadísticas", leagues: "Ligas" };
   const pageTitle = titles[view.name] || "Estadistik";
+
+  // El botón de sesión también muestra el estado del guardado: rueda mientras guarda, tilde al terminar.
+  const st = saveState === "error" ? "error" : saveState === "saved" ? "saved" : saveState === "pending" ? "pending" : "idle";
+  const authIcon = (size) => {
+    if (!canEdit) return <LogIn size={size} />;
+    if (st === "pending") return <Loader2 size={size} className="animate-spin" />;
+    if (st === "saved") return <Check size={size} />;
+    if (st === "error") return <CloudOff size={size} />;
+    return <LogOut size={size} />;
+  };
+  const authLabel = !canEdit ? "Organizadores" : st === "pending" ? "Guardando…" : st === "saved" ? "Guardado" : st === "error" ? "Sin guardar" : "Salir";
+  const authColor = st === "error" ? "#F0A8A0" : st === "saved" ? "#7FD6B0" : "#C9D2DB";
+  const authClick = canEdit ? () => {
+    if (st === "pending") return; // no salir mientras se están guardando los cambios
+    if (st === "error" && !window.confirm("Hay cambios sin guardar. Si salís ahora se pierden. ¿Salir igual?")) return;
+    onLogout();
+  } : onLogin;
 
   const [menuOpen, setMenuOpen] = useState(false);
   const touchY = useRef(0);
@@ -312,7 +340,7 @@ function TopNav({ view, setView, saveState, db, liga, setLigaId, canEdit, userEm
   }, [menuOpen]);
 
   const go = (name) => { setView({ name }); setMenuOpen(false); };
-  const authClick = () => { setMenuOpen(false); (canEdit ? onLogout : onLogin)(); };
+  const menuAuthClick = () => { setMenuOpen(false); authClick(); };
   const iconBtn = { display: "flex", alignItems: "center", justifyContent: "center", height: 44, width: 44, flexShrink: 0, background: "transparent", border: "none", color: "white", cursor: "pointer" };
 
   return (
@@ -339,10 +367,9 @@ function TopNav({ view, setView, saveState, db, liga, setLigaId, canEdit, userEm
               );
             })}
           </nav>
-          <SaveIndicator saveState={saveState} />
-          <button type="button" onClick={canEdit ? onLogout : onLogin} title={canEdit ? userEmail : "Ingreso de organizadores"}
-            style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0, borderRadius: 8, padding: "8px 12px", fontSize: 13, fontWeight: 600, border: "1px solid #2A3A4E", background: "transparent", color: "#C9D2DB", cursor: "pointer" }}>
-            {canEdit ? <LogOut size={15} /> : <LogIn size={15} />}<span>{canEdit ? "Salir" : "Organizadores"}</span>
+          <button type="button" onClick={authClick} disabled={st === "pending"} aria-busy={st === "pending"} title={canEdit && st === "idle" ? userEmail : undefined}
+            style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6, flexShrink: 0, minWidth: 128, borderRadius: 8, padding: "8px 12px", fontSize: 13, fontWeight: 600, border: "1px solid #2A3A4E", background: "transparent", color: authColor, cursor: st === "pending" ? "default" : "pointer", transition: "color 150ms" }}>
+            {authIcon(15)}<span>{authLabel}</span>
           </button>
         </div>
       </header>
@@ -356,9 +383,8 @@ function TopNav({ view, setView, saveState, db, liga, setLigaId, canEdit, userEm
           </div>
           <span style={{ whiteSpace: "nowrap", fontSize: 15, fontWeight: 700, color: "white", textAlign: "center" }}>{pageTitle}</span>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 2, minWidth: 0 }}>
-            <SaveIndicator saveState={saveState} />
-            <button type="button" aria-label={canEdit ? "Cerrar sesión" : "Ingreso de organizadores"} onClick={canEdit ? onLogout : onLogin} style={{ ...iconBtn, color: "#C9D2DB" }}>
-              {canEdit ? <LogOut size={20} /> : <LogIn size={20} />}
+            <button type="button" aria-label={authLabel} aria-busy={st === "pending"} onClick={authClick} disabled={st === "pending"} style={{ ...iconBtn, color: authColor }}>
+              {authIcon(20)}
             </button>
           </div>
         </div>
@@ -399,7 +425,7 @@ function TopNav({ view, setView, saveState, db, liga, setLigaId, canEdit, userEm
             })}
           </nav>
 
-          <button type="button" onClick={authClick}
+          <button type="button" onClick={menuAuthClick}
             style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 10, minHeight: 52, marginTop: 16, borderRadius: 14, border: "1px solid #2A3A4E", background: "transparent", color: "#C9D2DB", fontSize: 16, fontWeight: 600, cursor: "pointer" }}>
             {canEdit ? <LogOut size={18} /> : <LogIn size={18} />}<span>{canEdit ? "Cerrar sesión" : "Ingreso de organizadores"}</span>
           </button>
@@ -789,12 +815,13 @@ function MatchesView({ db, commit, setView, ligaId, canEdit }) {
 
 // ---------- live match ----------
 
-function MatchView({ db, commit, matchId, setView, canEdit }) {
+function MatchView({ db, commit, matchId, setView, canEdit, setToast }) {
   const match = db.matches.find((m) => m.id === matchId);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [dorsalTarget, setDorsalTarget] = useState(null);
+  const [tab, setTab] = useState("a");
 
   if (!match) {
     return (<div><BackBar onBack={() => setView({ name: "matches" })} title="Partido" /><EmptyState text="Este partido ya no existe." /></div>);
@@ -842,9 +869,84 @@ function MatchView({ db, commit, matchId, setView, canEdit }) {
         base[field] = Math.max(0, base[field] + delta);
       }
 
+      if (field === "rojas" && delta > 0) { base.en_cancha = false; base.zona = null; } // la roja saca al jugador de la cancha
+
       if (idx === -1) stats.push(base); else stats[idx] = base;
       return { ...prev, stats };
     });
+  };
+
+  // Entra un jugador del banco. Si sale otro (saleId) cuenta como cambio y ocupa su zona;
+  // si entra a un lugar libre, no cuenta como cambio y se ubica en la zona que tenga lugar para su sexo.
+  const entrar = (jugadorId, saleId) => {
+    if (finalized) return;
+    commit((prev) => {
+      const stats = [...prev.stats];
+      const buscar = (pid) => stats.findIndex((st) => st.partido_id === matchId && st.jugador_id === pid);
+      const tocar = (pid, cambios) => {
+        const i = buscar(pid);
+        const base = i === -1 ? emptyStat(matchId, pid) : readStat(stats[i]);
+        const nuevo = { ...base, ...cambios };
+        if (i === -1) stats.push(nuevo); else stats[i] = nuevo;
+      };
+      const jugador = prev.players.find((x) => x.id === jugadorId);
+      let zona;
+      if (saleId) {
+        const i = buscar(saleId);
+        zona = i === -1 ? null : stats[i].zona ?? null;
+        tocar(saleId, { en_cancha: false, zona: null });
+      } else {
+        const adentro = stats
+          .filter((st) => st.partido_id === matchId && st.en_cancha)
+          .map((st) => { const pl = prev.players.find((x) => x.id === st.jugador_id); return pl && pl.equipo_id === jugador?.equipo_id ? { zona: st.zona, sexo: pl.sexo } : null; })
+          .filter(Boolean);
+        zona = elegirZona(adentro, jugador?.sexo);
+      }
+      tocar(jugadorId, { en_cancha: true, zona });
+      const key = jugador?.equipo_id === match.equipo_a_id ? "cambios_a" : "cambios_b";
+      const matches = saleId ? prev.matches.map((m) => (m.id === matchId ? { ...m, [key]: (m[key] || 0) + 1 } : m)) : prev.matches;
+      return { ...prev, stats, matches };
+    });
+  };
+
+  // Sacar de la cancha sin registrar cambio (corregir un error de carga).
+  const sacar = (jugadorId) => {
+    if (finalized) return;
+    commit((prev) => ({
+      ...prev,
+      stats: prev.stats.map((st) => (st.partido_id === matchId && st.jugador_id === jugadorId ? { ...st, en_cancha: false, zona: null } : st)),
+    }));
+  };
+
+  // Rotación de zonas: los de ataque pasan a defensa y al revés.
+  const rotarZonas = (teamId) => {
+    if (finalized) return;
+    commit((prev) => ({
+      ...prev,
+      stats: prev.stats.map((st) => {
+        if (st.partido_id !== matchId || !st.en_cancha) return st;
+        if (prev.players.find((x) => x.id === st.jugador_id)?.equipo_id !== teamId) return st;
+        return { ...st, zona: st.zona === "ataque" ? "defensa" : st.zona === "defensa" ? "ataque" : st.zona };
+      }),
+    }));
+  };
+
+  const moverZona = (jugadorId) => {
+    if (finalized) return;
+    commit((prev) => ({
+      ...prev,
+      stats: prev.stats.map((st) => (st.partido_id === matchId && st.jugador_id === jugadorId ? { ...st, zona: st.zona === "ataque" ? "defensa" : "ataque" } : st)),
+    }));
+  };
+
+  const setSexo = (jugadorId, sexo) => commit((prev) => ({ ...prev, players: prev.players.map((x) => (x.id === jugadorId ? { ...x, sexo } : x)) }));
+
+  const ajustarCambios = (equipoKey, delta) => {
+    if (finalized) return;
+    commit((prev) => ({
+      ...prev,
+      matches: prev.matches.map((m) => (m.id === matchId ? { ...m, [`cambios_${equipoKey}`]: Math.max(0, (m[`cambios_${equipoKey}`] || 0) + delta) } : m)),
+    }));
   };
 
   const finalize = () => {
@@ -854,7 +956,7 @@ function MatchView({ db, commit, matchId, setView, canEdit }) {
         ? { ...m, estado: "finalizado", resultado_equipo_a: matchScore(prev, matchId, m.equipo_a_id), resultado_equipo_b: matchScore(prev, matchId, m.equipo_b_id) }
         : m),
       // Al finalizar, el dorsal de cada jugador queda fijo en la historia del partido.
-      stats: prev.stats.map((st) => (st.partido_id === matchId && st.dorsal == null ? { ...st, dorsal: prev.players.find((pl) => pl.id === st.jugador_id)?.numero ?? null } : st)),
+      stats: prev.stats.map((st) => (st.partido_id === matchId ? { ...st, en_cancha: false, zona: null, dorsal: st.dorsal ?? prev.players.find((pl) => pl.id === st.jugador_id)?.numero ?? null } : st)),
     }));
     setConfirmOpen(false);
   };
@@ -877,7 +979,7 @@ function MatchView({ db, commit, matchId, setView, canEdit }) {
           </div>
         } />
 
-      <div style={{ marginBottom: 24, overflow: "hidden", borderRadius: 16, background: INK }}>
+      <div className="live-scoreboard" style={{ marginBottom: 16, overflow: "hidden", borderRadius: 16, background: INK }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 16px", fontSize: 12, color: "#9AA7B2" }}>
           <span style={{ display: "flex", alignItems: "center", gap: 4 }}><Calendar size={12} /> {fmtFecha(match.fecha)} {match.hora ? `· ${match.hora}` : ""}</span>
           {match.lugar && <span style={{ display: "flex", alignItems: "center", gap: 4 }}><MapPin size={12} /> {match.lugar}</span>}
@@ -893,11 +995,26 @@ function MatchView({ db, commit, matchId, setView, canEdit }) {
         </div>
       </div>
 
-      {canEdit && !finalized && <p style={{ marginBottom: 12, fontSize: 13, color: MUTED }}>Tip: tocá el número de un jugador para cambiar su dorsal solo en este partido.</p>}
+      {canEdit && !finalized && <p style={{ marginBottom: 12, fontSize: 13, color: MUTED }}>Tocá un jugador en cancha y después la acción. Para cambiar un número, tocá su dorsal.</p>}
 
-      <div className="grid gap-6 lg:grid-cols-2">
-        <TeamStatsPanel db={db} teamId={match.equipo_a_id} getStat={getStat} bump={bump} finalized={finalized || !canEdit} color={COLOR_A} setView={setView} onEditDorsal={setDorsalTarget} />
-        <TeamStatsPanel db={db} teamId={match.equipo_b_id} getStat={getStat} bump={bump} finalized={finalized || !canEdit} color={COLOR_B} setView={setView} onEditDorsal={setDorsalTarget} />
+      <div className="team-tabs" role="tablist">
+        {[["a", match.equipo_a_id, COLOR_A], ["b", match.equipo_b_id, COLOR_B]].map(([k, tid, col]) => (
+          <button key={k} type="button" role="tab" aria-selected={tab === k} onClick={() => setTab(k)}
+            style={{ flex: 1, minWidth: 0, minHeight: 44, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", borderRadius: 10, padding: "0 10px", fontWeight: 700, cursor: "pointer", border: tab === k ? `2px solid ${col.ring}` : `1px solid ${LINE}`, background: tab === k ? col.bg : "white", color: tab === k ? col.text : MUTED }}>
+            {teamName(db, tid)}
+          </button>
+        ))}
+      </div>
+
+      <div className="grid gap-6 lg:grid-cols-2" style={{ alignItems: "start" }}>
+        <div className="team-panel" data-active={tab === "a"}>
+          <LiveTeamPanel db={db} match={match} teamId={match.equipo_a_id} equipoKey="a" color={COLOR_A} readOnly={finalized || !canEdit}
+            getStat={getStat} bump={bump} entrar={entrar} sacar={sacar} ajustarCambios={ajustarCambios} onEditDorsal={setDorsalTarget} setView={setView} setToast={setToast} rotarZonas={rotarZonas} moverZona={moverZona} setSexo={setSexo} />
+        </div>
+        <div className="team-panel" data-active={tab === "b"}>
+          <LiveTeamPanel db={db} match={match} teamId={match.equipo_b_id} equipoKey="b" color={COLOR_B} readOnly={finalized || !canEdit}
+            getStat={getStat} bump={bump} entrar={entrar} sacar={sacar} ajustarCambios={ajustarCambios} onEditDorsal={setDorsalTarget} setView={setView} setToast={setToast} rotarZonas={rotarZonas} moverZona={moverZona} setSexo={setSexo} />
+        </div>
       </div>
 
       <div style={{ marginTop: 32, display: "flex", justifyContent: "center" }}>
@@ -933,93 +1050,243 @@ function MatchView({ db, commit, matchId, setView, canEdit }) {
   );
 }
 
-function TeamStatsPanel({ db, teamId, getStat, bump, finalized, color, setView, onEditDorsal }) {
+// ---------- Partido en vivo ----------
+const ACCIONES = [
+  { id: "gol", label: "Gol", field: "puntos", val: (x) => x.puntos, tono: "gol" },
+  { id: "fallo", label: "Fallo", field: "tiros", val: (x) => x.tiros - x.puntos },
+  { id: "asist", label: "Asist.", field: "asistencias", val: (x) => x.asistencias },
+  { id: "reb", label: "Reb.", field: "rebotes", val: (x) => x.rebotes },
+  { id: "robo", label: "Robo", field: "robos", val: (x) => x.robos },
+  { id: "perd", label: "Pérd.", field: "perdidas", val: (x) => x.perdidas },
+  { id: "fp", label: "Free pass", field: "free_pass", val: (x) => x.free_pass, tono: "falta" },
+  { id: "pen", label: "Penal", field: "penales", val: (x) => x.penales, tono: "falta" },
+  { id: "am", label: "Amarilla", field: "amarillas", val: (x) => x.amarillas, tono: "amarilla" },
+  { id: "ro", label: "Roja", field: "rojas", val: (x) => x.rojas, tono: "roja" },
+];
+
+const resumenStats = (x) => {
+  const partes = [];
+  if (x.puntos) partes.push(`${x.puntos} pts`);
+  if (x.tiros) partes.push(`tiros ${x.puntos}/${x.tiros}`);
+  [[x.asistencias, "as"], [x.rebotes, "reb"], [x.robos, "rob"], [x.perdidas, "pér"], [x.free_pass, "FP"], [x.penales, "pen"]].forEach(([n, l]) => { if (n) partes.push(`${n} ${l}`); });
+  return partes.length ? partes.join(" · ") : "Sin acciones";
+};
+
+function Tarjetas({ s }) {
+  if (!s.amarillas && !s.rojas) return null;
+  const carta = (bg, k) => <span key={k} style={{ display: "inline-block", width: 9, height: 13, borderRadius: 2, background: bg, border: "1px solid rgba(0,0,0,0.25)" }} />;
+  return (
+    <span style={{ display: "inline-flex", gap: 3, marginLeft: 6, verticalAlign: "middle" }} aria-label={`${s.amarillas} amarilla(s), ${s.rojas} roja(s)`}>
+      {Array.from({ length: s.amarillas }, (_, i) => carta("#F2C200", `a${i}`))}
+      {Array.from({ length: s.rojas }, (_, i) => carta("#D32F2F", `r${i}`))}
+    </span>
+  );
+}
+
+function FilaJugador({ p, s, color, selected, onSelect, onEditDorsal, right, atenuado }) {
+  const dorsal = s.dorsal ?? p.numero;
+  const cambiado = s.dorsal != null && s.dorsal !== p.numero;
+  const badge = { display: "flex", height: 34, minWidth: 38, padding: "0 6px", flexShrink: 0, alignItems: "center", justifyContent: "center", borderRadius: 8, boxSizing: "border-box", background: color.bg, color: color.text, fontFamily: "monospace", fontSize: 15, fontWeight: 800, border: cambiado ? `2px solid ${GOLD}` : "2px solid transparent" };
+  return (
+    <div onClick={onSelect} tabIndex={onSelect ? 0 : undefined} onKeyDown={onSelect ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(); } } : undefined}
+      style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 8px", borderRadius: 10, boxSizing: "border-box", cursor: onSelect ? "pointer" : "default", opacity: atenuado ? 0.6 : 1,
+        border: selected ? `2px solid ${color.ring}` : `1px solid ${LINE}`, background: selected ? color.bg : "white" }}>
+      {onEditDorsal ? (
+        <button type="button" onClick={(e) => { e.stopPropagation(); onEditDorsal(p); }} title="Cambiar el dorsal solo en este partido" aria-label={`Dorsal de ${verNombre(p.nombre)}: tocar para cambiarlo`} style={{ ...badge, cursor: "pointer" }}>{dorsal ?? "–"}</button>
+      ) : <span style={badge}>{dorsal ?? "–"}</span>}
+      <div style={{ minWidth: 0, flex: 1 }}>
+        <p style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 14, fontWeight: 700 }}>{SEXO[p.sexo] && <span aria-label={SEXO[p.sexo].nombre} style={{ marginRight: 4, color: SEXO[p.sexo].color, fontWeight: 800 }}>{SEXO[p.sexo].sim}</span>}{verNombre(p.nombre)}<Tarjetas s={s} /></p>
+        <p style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 11, color: MUTED }}>{cambiado ? `habitual ${p.numero ?? "–"} · ` : ""}{resumenStats(s)}</p>
+      </div>
+      {right}
+    </div>
+  );
+}
+
+function LiveTeamPanel({ db, match, teamId, equipoKey, color, readOnly, getStat, bump, entrar, sacar, ajustarCambios, onEditDorsal, setView, setToast, rotarZonas, moverZona, setSexo }) {
+  const [selId, setSelId] = useState(null);
+  const [corregir, setCorregir] = useState(false);
+  const [entraId, setEntraId] = useState(null);
+  const [verTodos, setVerTodos] = useState(false);
+
   const players = db.players.filter((p) => p.equipo_id === teamId).sort(porApellido);
-  const totals = players.reduce((acc, p) => {
-    const s = getStat(p.id);
-    STAT_FIELDS.forEach((f) => { acc[f.key] += s[f.key]; });
-    return acc;
-  }, Object.fromEntries(STAT_FIELDS.map((f) => [f.key, 0])));
+  const info = players.map((p) => ({ p, s: getStat(p.id), jugo: db.stats.some((st) => st.partido_id === match.id && st.jugador_id === p.id) }));
+  const enCancha = info.filter((x) => x.s.en_cancha);
+  const resto = info.filter((x) => !x.s.en_cancha);
+  const cambios = match[`cambios_${equipoKey}`] || 0;
+  const sel = enCancha.find((x) => x.p.id === selId) || null;
+  const ataque = enCancha.filter((x) => x.s.zona === "ataque");
+  const defensa = enCancha.filter((x) => x.s.zona === "defensa");
+  const sinZona = enCancha.filter((x) => x.s.zona !== "ataque" && x.s.zona !== "defensa");
+  const tot = info.reduce((a, x) => ({ fp: a.fp + x.s.free_pass, pen: a.pen + x.s.penales, am: a.am + x.s.amarillas, ro: a.ro + x.s.rojas }), { fp: 0, pen: 0, am: 0, ro: 0 });
+  const dorsalDe = (x) => x.s.dorsal ?? x.p.numero ?? "–";
+
+  const aplicar = (a) => {
+    if (!sel) return;
+    const delta = corregir ? -1 : 1;
+    bump(sel.p.id, a.field, delta);
+    if (corregir) setCorregir(false);
+    if (delta > 0 && a.field === "rojas") { setToast?.(`Roja para ${verNombre(sel.p.nombre)}: sale de la cancha y no puede volver.`); setSelId(null); }
+    if (delta > 0 && a.field === "amarillas" && sel.s.amarillas + 1 >= 2) setToast?.(`2ª amarilla para ${verNombre(sel.p.nombre)}.`);
+  };
+
+  const pedirEntrada = (x) => {
+    if (enCancha.length < EN_CANCHA) { entrar(x.p.id, null); setSelId(x.p.id); } // lugar libre: no cuenta como cambio
+    else { setVerTodos(false); setEntraId(x.p.id); }
+  };
+
+  const filaEnCancha = (x) => (
+    <FilaJugador key={x.p.id} p={x.p} s={x.s} color={color} selected={sel?.p.id === x.p.id}
+      onSelect={readOnly ? undefined : () => setSelId(sel?.p.id === x.p.id ? null : x.p.id)} onEditDorsal={readOnly ? undefined : onEditDorsal}
+      right={readOnly ? null : (
+        <span style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+          <button type="button" aria-label={`Pasar a ${x.s.zona === "ataque" ? "defensa" : "ataque"} a ${verNombre(x.p.nombre)}`} title={`Pasar a ${x.s.zona === "ataque" ? "defensa" : "ataque"}`} onClick={(e) => { e.stopPropagation(); moverZona(x.p.id); }} style={{ ...chico, background: CHIP }}><ArrowUpDown size={15} /></button>
+          <button type="button" aria-label={`Sacar de la cancha a ${verNombre(x.p.nombre)} sin contar cambio`} title="Sacar de la cancha (sin contar cambio)" onClick={(e) => { e.stopPropagation(); sacar(x.p.id); }} style={{ ...chico, background: CHIP }}><X size={15} /></button>
+        </span>
+      )} />
+  );
+  const bloque = (titulo, lista, conTope = true) => {
+    const v = lista.filter((x) => x.p.sexo === "varon").length;
+    const m = lista.filter((x) => x.p.sexo === "mujer").length;
+    const completo = lista.length === POR_ZONA && v === POR_SEXO && m === POR_SEXO;
+    const excedido = lista.length > POR_ZONA || v > POR_SEXO || m > POR_SEXO;
+    return (
+      <div key={titulo}>
+        <p style={{ margin: "2px 2px 6px", display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: 11, fontWeight: 800, letterSpacing: "0.05em", textTransform: "uppercase", color: FAINT }}>
+          <span>{titulo}{conTope ? ` (${lista.length}/${POR_ZONA})` : ""}</span>
+          {conTope && <span style={{ color: excedido ? RED : completo ? GREEN : MUTED }}>{SEXO.varon.sim} {v}/{POR_SEXO} · {SEXO.mujer.sim} {m}/{POR_SEXO}</span>}
+        </p>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>{lista.map(filaEnCancha)}</div>
+      </div>
+    );
+  };
+
+  const chico = { display: "flex", alignItems: "center", justifyContent: "center", height: 30, width: 30, borderRadius: 8, border: "none", background: "white", cursor: "pointer" };
+  const entraJugador = entraId ? players.find((p) => p.id === entraId) : null;
+  const mismoSexo = (x) => !entraJugador?.sexo || !x.p.sexo || x.p.sexo === entraJugador.sexo;
+  const candidatos = verTodos ? enCancha : enCancha.filter(mismoSexo);
 
   return (
-    <div style={cardStyle}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", borderTopLeftRadius: 12, borderTopRightRadius: 12, padding: "12px 16px", background: color.bg }}>
-        <h3 style={{ fontWeight: 800, color: color.text }}>{teamName(db, teamId)}</h3>
-        <span style={{ fontSize: 12, fontWeight: 700, color: color.text }}>{players.length} jugador{players.length === 1 ? "" : "es"}</span>
+    <div style={{ borderRadius: 12, border: `1px solid ${LINE}`, background: "white" }}>
+      <div style={{ borderTopLeftRadius: 11, borderTopRightRadius: 11, padding: "10px 12px", background: color.bg }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+          <h3 style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: 800, color: color.text }}>{teamName(db, teamId)}</h3>
+          <span style={{ flexShrink: 0, fontSize: 12, fontWeight: 700, color: color.text }}>En cancha {enCancha.length}/{EN_CANCHA}</span>
+        </div>
+        <div style={{ marginTop: 6, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, fontSize: 12, color: color.text }}>
+          <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            Cambios <strong style={{ color: cambios > MAX_CAMBIOS ? RED : color.text }}>{cambios}/{MAX_CAMBIOS}</strong>
+            {!readOnly && <>
+              <button type="button" aria-label="Restar un cambio" disabled={cambios === 0} onClick={() => ajustarCambios(equipoKey, -1)} style={{ ...chico, opacity: cambios === 0 ? 0.4 : 1 }}><Minus size={14} /></button>
+              <button type="button" aria-label="Sumar un cambio" onClick={() => ajustarCambios(equipoKey, 1)} style={chico}><Plus size={14} /></button>
+            </>}
+          </span>
+          <span style={{ whiteSpace: "nowrap" }}>FP {tot.fp} · Pen {tot.pen} · 🟨 {tot.am} · 🟥 {tot.ro}</span>
+        </div>
+        {!readOnly && enCancha.length > 0 && (
+          <button type="button" onClick={() => rotarZonas(teamId)} style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 6, minHeight: 36, borderRadius: 8, border: "none", background: "white", padding: "0 12px", fontSize: 13, fontWeight: 700, color: color.text, cursor: "pointer" }}>
+            <Repeat size={15} /> Rotar zonas (ataque ⇄ defensa)
+          </button>
+        )}
       </div>
 
       {players.length === 0 ? (
         <div style={{ padding: 16 }}>
           <EmptyState text="Este equipo todavía no tiene jugadores cargados."
-            action={<button type="button" onClick={() => setView({ name: "teams", teamId })} style={{ ...btnPrimary, marginTop: 12, fontSize: 14 }}>Agregar jugadores</button>} />
+            action={!readOnly ? <button type="button" onClick={() => setView({ name: "teams", teamId })} style={{ ...btnPrimary, marginTop: 12, fontSize: 14 }}>Agregar jugadores</button> : null} />
         </div>
       ) : (
-        <div>{players.map((p, i) => <PlayerStatRow key={p.id} player={p} stat={getStat(p.id)} bump={bump} finalized={finalized} color={color} isLast={i === players.length - 1} onEditDorsal={onEditDorsal} />)}</div>
+        <div style={{ padding: 10 }}>
+          {enCancha.length === 0 && !readOnly && <p style={{ padding: "4px 4px 10px", fontSize: 13, color: MUTED }}>Elegí quiénes arrancan: tocá <strong>Entrar</strong> en los jugadores del banco (hasta {EN_CANCHA}: {POR_SEXO} varones y {POR_SEXO} mujeres en ataque, y lo mismo en defensa). Se ubican solos en cada zona.</p>}
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            {(!readOnly || ataque.length > 0) && bloque("Ataque", ataque)}
+            {(!readOnly || defensa.length > 0) && bloque("Defensa", defensa)}
+            {sinZona.length > 0 && bloque("En cancha (sin zona)", sinZona, false)}
+          </div>
+
+          {readOnly ? (
+            <>
+              {resto.some((x) => x.jugo) && <p style={{ margin: "14px 2px 6px", fontSize: 11, fontWeight: 800, letterSpacing: "0.05em", textTransform: "uppercase", color: FAINT }}>Jugaron</p>}
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {resto.filter((x) => x.jugo).map((x) => <FilaJugador key={x.p.id} p={x.p} s={x.s} color={color} />)}
+              </div>
+              {resto.some((x) => !x.jugo) && <p style={{ margin: "14px 2px 0", fontSize: 12, color: MUTED }}>No jugaron: {resto.filter((x) => !x.jugo).map((x) => verNombre(x.p.nombre)).join(" · ")}</p>}
+            </>
+          ) : (
+            <>
+              <p style={{ margin: "14px 2px 6px", fontSize: 11, fontWeight: 800, letterSpacing: "0.05em", textTransform: "uppercase", color: FAINT }}>Banco ({resto.length})</p>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {resto.map((x) => {
+                  const expulsado = x.s.rojas > 0;
+                  return (
+                    <FilaJugador key={x.p.id} p={x.p} s={x.s} color={color} atenuado={expulsado} onEditDorsal={onEditDorsal}
+                      right={expulsado
+                        ? <span style={{ flexShrink: 0, padding: "0 8px", fontSize: 12, fontWeight: 700, color: RED }}>Expulsado</span>
+                        : <span style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+                          {!x.p.sexo && ["varon", "mujer"].map((k) => (
+                            <button key={k} type="button" aria-label={`Es ${SEXO[k].nombre.toLowerCase()}`} title={`Marcar como ${SEXO[k].nombre.toLowerCase()}`} onClick={() => setSexo(x.p.id, k)} style={{ ...chico, background: CHIP, color: SEXO[k].color, fontSize: 16, fontWeight: 800 }}>{SEXO[k].sim}</button>
+                          ))}
+                          <button type="button" onClick={() => pedirEntrada(x)} style={{ minHeight: 40, borderRadius: 8, border: "none", padding: "0 14px", fontWeight: 700, color: "white", background: color.bar, cursor: "pointer" }}>Entrar</button>
+                        </span>} />
+                  );
+                })}
+              </div>
+            </>
+          )}
+        </div>
       )}
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, borderTop: `1px solid ${LINE}`, padding: "12px 16px" }}>
-        {STAT_FIELDS.map((f) => (
-          <div key={f.key} style={{ textAlign: "center" }}>
-            <p style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.03em", color: FAINT }}>Total {f.label.toLowerCase()}</p>
-            <p style={{ fontFamily: "monospace", fontSize: 20, fontWeight: 900, color: color.text }}>{totals[f.key]}</p>
+      {!readOnly && players.length > 0 && (
+        <div style={{ position: "sticky", bottom: 0, zIndex: 20, borderTop: `1px solid ${LINE}`, borderBottomLeftRadius: 11, borderBottomRightRadius: 11, background: "white", boxShadow: "0 -6px 16px rgba(0,0,0,0.08)", padding: "8px 10px calc(8px + env(safe-area-inset-bottom, 0px))" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 6 }}>
+            <p style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 13, color: sel ? "#10151C" : MUTED }}>
+              {sel ? <><strong style={{ fontFamily: "monospace" }}>{dorsalDe(sel)}</strong> · {verNombre(sel.p.nombre)}</> : "Tocá un jugador en cancha"}
+            </p>
+            <button type="button" disabled={!sel} aria-pressed={corregir} onClick={() => setCorregir(!corregir)}
+              style={{ flexShrink: 0, minHeight: 34, borderRadius: 8, padding: "0 12px", fontSize: 12, fontWeight: 700, cursor: sel ? "pointer" : "default", opacity: sel ? 1 : 0.4, border: corregir ? `1px solid ${RED}` : "1px solid transparent", background: corregir ? "#FBE3E1" : CHIP, color: corregir ? RED : "#10151C" }}>
+              − Corregir
+            </button>
           </div>
-        ))}
-      </div>
-      <div style={{ borderTop: `1px solid ${LINE}`, padding: "8px 16px", textAlign: "center", fontSize: 12, color: MUTED }}>
-        Efectividad del equipo:{" "}
-        <strong style={{ color: color.text, fontFamily: "monospace" }}>
-          {totals.puntos}/{totals.tiros} ({efectividad(totals.puntos, totals.tiros).toFixed(0)}%)
-        </strong>
-      </div>
-    </div>
-  );
-}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 6 }}>
+            {ACCIONES.map((a) => {
+              const bg = corregir ? "#FBE3E1" : a.tono === "gol" ? color.bar : a.tono === "amarilla" ? "#FFF1B8" : a.tono === "roja" ? "#FBE3E1" : a.tono === "falta" ? "#FDF0D5" : CHIP;
+              const borde = corregir ? RED : a.tono === "amarilla" ? "#E0B400" : a.tono === "roja" ? RED : "transparent";
+              return (
+                <button key={a.id} type="button" disabled={!sel} onClick={() => aplicar(a)}
+                  style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 1, minHeight: 54, minWidth: 0, borderRadius: 10, padding: "4px 2px", border: `1px solid ${borde}`, background: bg, color: !corregir && a.tono === "gol" ? "white" : "#10151C", cursor: sel ? "pointer" : "default", opacity: sel ? 1 : 0.45, touchAction: "manipulation" }}>
+                  <span style={{ fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" }}>{corregir ? "− " : ""}{a.label}</span>
+                  <span style={{ fontFamily: "monospace", fontSize: 16, fontWeight: 800 }}>{sel ? a.val(sel.s) : "–"}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
-function StatStepper({ label, value, onDec, onInc, disabled, color, minValue = 0, hint }) {
-  const decDisabled = disabled || value <= minValue;
-  return (
-    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
-      <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.03em", color: FAINT }}>{label}</span>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
-        <button type="button" onClick={onDec} disabled={decDisabled}
-          className="stepper-btn" style={{ display: "flex", alignItems: "center", justifyContent: "center", borderRadius: 8, background: CHIP, color: "#10151C", border: "none", cursor: decDisabled ? "default" : "pointer", opacity: decDisabled ? 0.35 : 1 }}>
-          <Minus size={15} />
-        </button>
-        <span style={{ minWidth: 28, textAlign: "center", fontFamily: "monospace", fontSize: 18, fontWeight: 700 }}>{value}</span>
-        <button type="button" onClick={onInc} disabled={disabled}
-          className="stepper-btn" style={{ display: "flex", alignItems: "center", justifyContent: "center", borderRadius: 8, background: color.bar, color: "white", border: "none", cursor: disabled ? "default" : "pointer", opacity: disabled ? 0.35 : 1 }}>
-          <Plus size={15} />
-        </button>
-      </div>
-      <span style={{ fontSize: 10, fontFamily: "monospace", color: FAINT, minHeight: 12 }}>{hint || ""}</span>
-    </div>
-  );
-}
-
-function PlayerStatRow({ player, stat, bump, finalized, color, isLast, onEditDorsal }) {
-  // Dorsal del partido: el que se fijó para este partido o, si no hay, el habitual del jugador.
-  const dorsal = stat.dorsal ?? player.numero;
-  const cambiado = stat.dorsal != null && stat.dorsal !== player.numero;
-  const badge = { display: "flex", height: 32, minWidth: 36, padding: "0 6px", flexShrink: 0, alignItems: "center", justifyContent: "center", borderRadius: 8, boxSizing: "border-box", background: color.bg, color: color.text, fontFamily: "monospace", fontSize: 14, fontWeight: 800, border: cambiado ? `2px solid ${GOLD}` : "2px solid transparent" };
-  return (
-    <div style={{ padding: "12px 16px", borderBottom: isLast ? "none" : `1px solid ${LINE}` }}>
-      <div style={{ display: "flex", minWidth: 0, alignItems: "center", gap: 8, marginBottom: 8 }}>
-        {finalized ? (
-          <span style={badge}>{dorsal ?? "–"}</span>
-        ) : (
-          <button type="button" onClick={() => onEditDorsal(player)} title="Cambiar el dorsal solo en este partido" aria-label={`Dorsal de ${verNombre(player.nombre)}: tocar para cambiarlo`} style={{ ...badge, cursor: "pointer" }}>{dorsal ?? "–"}</button>
-        )}
-        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: 600 }}>{verNombre(player.nombre)}</span>
-        {cambiado && <span style={{ flexShrink: 0, fontSize: 11, color: MUTED }}>habitual {player.numero ?? "–"}</span>}
-      </div>
-      <div className="stat-grid">
-        {STAT_FIELDS.map((f) => (
-          <StatStepper key={f.key} label={f.short} value={stat[f.key]} disabled={finalized} color={color}
-            minValue={f.key === "tiros" ? stat.puntos : 0}
-            hint={f.key === "tiros" && stat.tiros > 0 ? `${efectividad(stat.puntos, stat.tiros).toFixed(0)}%` : null}
-            onDec={() => bump(player.id, f.key, -1)} onInc={() => bump(player.id, f.key, 1)} />
-        ))}
-      </div>
+      {entraJugador && (
+        <Modal onClose={() => setEntraId(null)}>
+          <h3 style={{ marginBottom: 4, fontSize: 18, fontWeight: 800 }}>Cambio</h3>
+          <p style={{ marginBottom: 4, fontSize: 14 }}>Entra <strong>{verNombre(entraJugador.nombre)}</strong>. ¿Quién sale?</p>
+          <p style={{ marginBottom: 12, fontSize: 13, color: cambios >= MAX_CAMBIOS ? RED : MUTED }}>
+            Cambios usados: {cambios} de {MAX_CAMBIOS}{cambios >= MAX_CAMBIOS ? ". Ya no quedan: si elegís a alguien, se registra igual." : "."}
+          </p>
+          {candidatos.length < enCancha.length && (
+            <p style={{ marginBottom: 10, fontSize: 13, color: MUTED }}>Solo se muestran los del mismo sexo ({SEXO[entraJugador.sexo]?.sim}). <button type="button" onClick={() => setVerTodos(true)} style={{ border: "none", background: "transparent", padding: 0, fontWeight: 700, color: color.text, textDecoration: "underline", cursor: "pointer" }}>Ver todos</button></p>
+          )}
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {candidatos.map((x) => (
+              <button key={x.p.id} type="button" onClick={() => { entrar(entraJugador.id, x.p.id); setSelId(entraJugador.id); setEntraId(null); }}
+                style={{ display: "flex", alignItems: "center", gap: 10, minHeight: 48, borderRadius: 10, border: `1px solid ${LINE}`, background: "white", padding: "0 12px", textAlign: "left", fontSize: 15, fontWeight: 600, cursor: "pointer" }}>
+                <span style={{ fontFamily: "monospace", fontWeight: 800, color: color.text }}>{dorsalDe(x)}</span>
+                <span style={{ minWidth: 0, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{SEXO[x.p.sexo] && <span style={{ marginRight: 4, color: SEXO[x.p.sexo].color }}>{SEXO[x.p.sexo].sim}</span>}Sale {verNombre(x.p.nombre)}{x.s.zona ? ` · ${x.s.zona}` : ""}</span>
+              </button>
+            ))}
+          </div>
+          <div style={{ marginTop: 14, display: "flex", justifyContent: "flex-end" }}>
+            <button type="button" onClick={() => setEntraId(null)} style={btnGhost}>Cancelar</button>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }
@@ -1052,7 +1319,7 @@ function DorsalModal({ player, habitual, actual, otros, onSave, onClose }) {
 function TeamsView({ db, commit, setView, teamId, ligaId, liga, canEdit }) {
   const equipos = teamsOf(db, ligaId);
   const selected = equipos.find((t) => t.id === teamId) || equipos[0] || null;
-  const [form, setForm] = useState({ nombre: "", numero: "" });
+  const [form, setForm] = useState({ nombre: "", numero: "", sexo: "" });
   const [editingId, setEditingId] = useState(null);
   const [error, setError] = useState("");
   const [deleteTarget, setDeleteTarget] = useState(null);
@@ -1060,7 +1327,7 @@ function TeamsView({ db, commit, setView, teamId, ligaId, liga, canEdit }) {
   const [deleteTeam, setDeleteTeam] = useState(null);
 
   const players = selected ? db.players.filter((p) => p.equipo_id === selected.id).sort(porApellido) : [];
-  const resetForm = () => { setForm({ nombre: "", numero: "" }); setEditingId(null); setError(""); };
+  const resetForm = () => { setForm({ nombre: "", numero: "", sexo: "" }); setEditingId(null); setError(""); };
 
   const agregarEquipo = () => {
     const nombre = nuevoEquipo.trim();
@@ -1094,9 +1361,9 @@ function TeamsView({ db, commit, setView, teamId, ligaId, liga, canEdit }) {
     if (numero !== null && (!Number.isInteger(numero) || numero < 0)) { setError("El número debe ser válido."); return; }
     const nombre = verNombre(form.nombre);
     if (editingId) {
-      commit((prev) => ({ ...prev, players: prev.players.map((p) => (p.id === editingId ? { ...p, nombre, numero } : p)) }));
+      commit((prev) => ({ ...prev, players: prev.players.map((p) => (p.id === editingId ? { ...p, nombre, numero, sexo: form.sexo || null } : p)) }));
     } else {
-      commit((prev) => ({ ...prev, players: [...prev.players, { id: uid("p"), nombre, numero, equipo_id: selected.id }] }));
+      commit((prev) => ({ ...prev, players: [...prev.players, { id: uid("p"), nombre, numero, sexo: form.sexo || null, equipo_id: selected.id }] }));
     }
     resetForm();
   };
@@ -1149,11 +1416,11 @@ function TeamsView({ db, commit, setView, teamId, ligaId, liga, canEdit }) {
                   <div key={p.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "12px 16px", borderBottom: i === players.length - 1 ? "none" : `1px solid ${LINE}` }}>
                     <div style={{ display: "flex", minWidth: 0, alignItems: "center", gap: 8 }}>
                       <span style={{ display: "flex", height: 28, width: 28, flexShrink: 0, alignItems: "center", justifyContent: "center", borderRadius: 6, background: CHIP, fontFamily: "monospace", fontSize: 12, fontWeight: 700 }}>{p.numero ?? "–"}</span>
-                      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: 600 }}>{verNombre(p.nombre)}</span>
+                      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: 600 }}>{SEXO[p.sexo] ? `${SEXO[p.sexo].sim} ` : ""}{verNombre(p.nombre)}</span>
                     </div>
                     {canEdit && (
                     <div style={{ display: "flex", flexShrink: 0, gap: 4 }}>
-                      <button type="button" onClick={() => { setEditingId(p.id); setForm({ nombre: verNombre(p.nombre), numero: p.numero == null ? "" : String(p.numero) }); }} aria-label="Editar" style={{ borderRadius: 6, padding: 8, background: "transparent", border: "none", cursor: "pointer" }}><Pencil size={16} /></button>
+                      <button type="button" onClick={() => { setEditingId(p.id); setForm({ nombre: verNombre(p.nombre), numero: p.numero == null ? "" : String(p.numero), sexo: p.sexo || "" }); }} aria-label="Editar" style={{ borderRadius: 6, padding: 8, background: "transparent", border: "none", cursor: "pointer" }}><Pencil size={16} /></button>
                       <button type="button" onClick={() => setDeleteTarget(p)} aria-label="Eliminar" style={{ borderRadius: 6, padding: 8, background: "transparent", border: "none", cursor: "pointer" }}><Trash2 size={16} color={RED} /></button>
                     </div>
                     )}
@@ -1173,6 +1440,15 @@ function TeamsView({ db, commit, setView, teamId, ligaId, liga, canEdit }) {
             <div style={{ marginBottom: 12 }}>
               <label style={labelStyle}>Número de camiseta (opcional)</label>
               <input type="number" min="0" value={form.numero} onChange={(e) => setForm((f) => ({ ...f, numero: e.target.value }))} onKeyDown={(e) => e.key === "Enter" && submit()} style={inputStyle} placeholder="Ej: 7 (o vacío)" />
+            </div>
+            <div style={{ marginBottom: 12 }}>
+              <label style={labelStyle}>Sexo (para ataque y defensa)</label>
+              <div style={{ display: "flex", gap: 8 }}>
+                {[["varon", "♂ Varón"], ["mujer", "♀ Mujer"]].map(([k, t]) => (
+                  <button key={k} type="button" aria-pressed={form.sexo === k} onClick={() => setForm((f) => ({ ...f, sexo: f.sexo === k ? "" : k }))}
+                    style={{ flex: 1, minHeight: 42, borderRadius: 8, fontWeight: 700, cursor: "pointer", border: form.sexo === k ? `2px solid ${INK}` : `1px solid ${LINE}`, background: form.sexo === k ? CHIP : "white" }}>{t}</button>
+                ))}
+              </div>
             </div>
             {error && <p style={{ marginBottom: 12, fontSize: 14, fontWeight: 500, color: RED }}>{error}</p>}
             <div style={{ display: "flex", gap: 8 }}>
@@ -1353,11 +1629,12 @@ function StatsView({ db, setView, setToast, ligaId, liga }) {
         if (playerFilter !== "todos" && player.id !== playerFilter) continue;
         const s = readStat(raw);
         if (!byPlayer.has(player.id)) {
-          byPlayer.set(player.id, { player, partidos: 0, ...Object.fromEntries(STAT_FIELDS.map((f) => [f.key, 0])) });
+          byPlayer.set(player.id, { player, partidos: 0, ...Object.fromEntries(STAT_FIELDS.map((f) => [f.key, 0])), ...Object.fromEntries(EXTRA_FIELDS.map((k) => [k, 0])) });
         }
         const agg = byPlayer.get(player.id);
         agg.partidos += 1;
         STAT_FIELDS.forEach((f) => { agg[f.key] += s[f.key]; });
+        EXTRA_FIELDS.forEach((k) => { agg[k] += s[k]; });
       }
     }
     return Array.from(byPlayer.values()).sort((a, b) => b.puntos - a.puntos);
@@ -1378,12 +1655,14 @@ function StatsView({ db, setView, setToast, ligaId, liga }) {
       "Liga", "Jugador", "Nº", "Equipo", "PJ",
       ...STAT_FIELDS.map((f) => f.label), "% Efectividad",
       ...STAT_FIELDS.map((f) => `Prom. ${f.label.toLowerCase()}`),
+      "Free pass", "Penales", "Amarillas", "Rojas",
     ]];
     rows.forEach((r) => filas.push([
       liga.nombre, verNombre(r.player.nombre), r.player.numero ?? "", teamName(db, r.player.equipo_id), r.partidos,
       ...STAT_FIELDS.map((f) => r[f.key]),
       num(efectividad(r.puntos, r.tiros).toFixed(1)),
       ...STAT_FIELDS.map((f) => num((r[f.key] / r.partidos).toFixed(1))),
+      ...EXTRA_FIELDS.map((k) => r[k]),
     ]));
     descargarCSV("korfball-estadisticas-acumuladas.csv", filas);
     setToast("Archivo descargado. Se abre directo en Excel.");
@@ -1393,6 +1672,7 @@ function StatsView({ db, setView, setToast, ligaId, liga }) {
     const filas = [[
       "Liga", "Fecha", "Hora", "Lugar", "Equipo local", "Equipo visitante", "Resultado", "Estado",
       "Jugador", "Nº", "Equipo del jugador", ...STAT_FIELDS.map((f) => f.label), "% Efectividad",
+      "Free pass", "Penales", "Amarillas", "Rojas",
     ]];
     const ordenados = [...partidosLiga].sort((a, b) => (a.fecha + (a.hora || "")).localeCompare(b.fecha + (b.hora || "")));
     for (const m of ordenados) {
@@ -1412,6 +1692,7 @@ function StatsView({ db, setView, setToast, ligaId, liga }) {
           verNombre(p.nombre), s.dorsal ?? p.numero ?? "", teamName(db, p.equipo_id),
           ...STAT_FIELDS.map((f) => s[f.key]),
           num(efectividad(s.puntos, s.tiros).toFixed(1)),
+          ...EXTRA_FIELDS.map((k) => s[k]),
         ]);
       }
     }
