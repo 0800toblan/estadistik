@@ -4,26 +4,29 @@ html, body, #root { min-height: 100%; }
 body { margin: 0; background: #F4F6F5; -webkit-text-size-adjust: 100%; }
 
 /* ---- Navegación responsive ---- */
-.nav-desktop { display: flex; }
-.nav-bottom { display: none; }
+.topbar-mobile, .menu-sheet { display: none; }
 
 @media (max-width: 767px) {
-  .nav-desktop { display: none !important; }
+  .topbar-desktop { display: none; }
+  .topbar-mobile { display: block; }
   .hide-mobile { display: none; }
-  .liga-select { flex: 1 1 auto !important; min-width: 0; max-width: none !important; }
-  .nav-bottom {
-    display: grid; grid-auto-flow: column; grid-auto-columns: 1fr;
-    position: fixed; left: 0; right: 0; bottom: 0; z-index: 40;
-    border-top: 1px solid #2A3A4E;
-    padding-bottom: env(safe-area-inset-bottom, 0px);
+  .menu-select { font-size: 16px; } /* evita el zoom automático de iOS */
+
+  /* Menú a pantalla completa: sube desde abajo */
+  .menu-sheet {
+    display: block; position: fixed; top: 0; left: 0; right: 0; height: 100dvh; z-index: 60;
+    overflow-y: auto; overscroll-behavior: contain;
+    transform: translateY(100%); visibility: hidden;
+    transition: transform 300ms cubic-bezier(0.2, 0.8, 0.2, 1), visibility 0s linear 300ms;
   }
-  .nav-bottom button {
-    display: flex; flex-direction: column; align-items: center; justify-content: center;
-    gap: 3px; min-height: 56px; background: transparent; border: 0;
-    font-size: 11px; font-weight: 600; cursor: pointer;
+  .menu-sheet.open {
+    transform: translateY(0); visibility: visible;
+    transition: transform 300ms cubic-bezier(0.2, 0.8, 0.2, 1), visibility 0s;
   }
-  .app-main { padding-bottom: calc(88px + env(safe-area-inset-bottom, 0px)) !important; }
-  .app-toast { bottom: calc(76px + env(safe-area-inset-bottom, 0px)) !important; }
+  .menu-panel { min-height: 100dvh; box-sizing: border-box; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .menu-sheet, .menu-sheet.open { transition: none !important; }
 }
 
 /* ---- Carga de estadísticas ---- */
@@ -36,4 +39,19 @@ body { margin: 0; background: #F4F6F5; -webkit-text-size-adjust: 100%; }
 }
 @media (min-width: 768px) {
   .stepper-btn { height: 38px; width: 38px; }
+}
+
+/* ---- Estadísticas: tarjetas en pantallas chicas, tabla en pantallas grandes ---- */
+.stats-cards { display: grid; grid-template-columns: 1fr; gap: 12px; }
+.stats-table { display: none; }
+@media (min-width: 640px) {
+  .stats-cards { grid-template-columns: repeat(2, 1fr); }
+}
+@media (min-width: 1024px) {
+  .stats-cards { display: none; }
+  .stats-table { display: block; }
+}
+@media (max-width: 767px) {
+  .stats-filters select { flex: 1 1 100%; min-height: 44px; font-size: 16px; }
+  .stats-export button { flex: 1 1 100%; justify-content: center; min-height: 44px; }
 }

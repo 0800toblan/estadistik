@@ -1,5 +1,3 @@
--- Liga de Korfball: esquema, seguridad y datos iniciales
--- Pegalo completo en Supabase → SQL Editor → Run.
 
 create table public.leagues (
   id uuid primary key default gen_random_uuid(),

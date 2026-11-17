@@ -7,7 +7,7 @@ const COLUMNS = {
   teams: ["id", "liga_id", "nombre"],
   players: ["id", "equipo_id", "nombre", "numero"],
   matches: ["id", "liga_id", "equipo_a_id", "equipo_b_id", "fecha", "hora", "lugar", "estado", "resultado_equipo_a", "resultado_equipo_b"],
-  stats: ["id", "partido_id", "jugador_id", "puntos", "asistencias", "rebotes", "tiros", "robos", "perdidas"],
+  stats: ["id", "partido_id", "jugador_id", "dorsal", "puntos", "asistencias", "rebotes", "tiros", "robos", "perdidas"],
 };
 const TABLES = Object.keys(COLUMNS); // orden: padres primero
 

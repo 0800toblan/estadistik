@@ -5,6 +5,8 @@ export function useAuth() {
   const [session, setSession] = useState(null);
   const [isOrganizer, setIsOrganizer] = useState(false);
   const [checking, setChecking] = useState(true);
+  const [orgError, setOrgError] = useState("");
+  const [tick, setTick] = useState(0); // sube para volver a verificar sin recargar la página
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => { setSession(data.session); if (!data.session) setChecking(false); });
@@ -13,14 +15,23 @@ export function useAuth() {
   }, []);
 
   useEffect(() => {
-    if (!session) { setIsOrganizer(false); setChecking(false); return; }
+    if (!session) { setIsOrganizer(false); setOrgError(""); setChecking(false); return; }
+    let cancelled = false;
     setChecking(true);
     supabase.from("organizers").select("user_id").eq("user_id", session.user.id).maybeSingle()
-      .then(({ data }) => { setIsOrganizer(!!data); setChecking(false); });
-  }, [session]);
+      .then(({ data, error }) => {
+        if (cancelled) return;
+        if (error) { console.error("organizers:", error); setOrgError(error.message); }
+        else setOrgError("");
+        setIsOrganizer(!!data);
+        setChecking(false);
+      });
+    return () => { cancelled = true; };
+  }, [session, tick]);
 
   return {
-    session, isOrganizer, checking,
+    session, isOrganizer, checking, orgError,
+    recheck: () => setTick((n) => n + 1),
     signIn: (email, password) => supabase.auth.signInWithPassword({ email, password }),
     signOut: () => supabase.auth.signOut(),
   };

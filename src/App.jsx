@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from "react"
 import {
   Home, Plus, ListChecks, Users, BarChart3, ChevronLeft, Check,
   Pencil, Trash2, X, MapPin, Calendar, Trophy, Minus, Download, Unlock,
-  Cloud, CloudOff, Shield, LogIn, LogOut
+  Cloud, CloudOff, Shield, LogIn, LogOut, Menu as MenuIcon
 } from "lucide-react";
 import { loadDb, saveDiff } from "./lib/syncDb";
 
@@ -26,6 +26,14 @@ const TEAM_SEED = [
 ];
 
 const SAVE_DELAY = 900;
+
+// Errores que NO se arreglan reintentando solos: sesión vencida o sin permiso.
+const esErrorDePermiso = (e) => e?.status === 401 || e?.status === 403 || e?.code === "42501" || /jwt|row-level security|permission denied/i.test(e?.message || "");
+const explicarError = (e) => {
+  if (esErrorDePermiso(e)) return "Tu sesión venció o no tenés permiso. Volvé a ingresar como organizador y se guardan los cambios pendientes.";
+  if (/failed to fetch|network|load failed/i.test(e?.message || "")) return "Sin conexión. Se reintenta solo cuando vuelva internet.";
+  return `Error de la base de datos: ${e?.message || "desconocido"}.`;
+};
 
 const INK = "#0F1B2B";
 const PAPER = "#F4F6F5";
@@ -52,7 +60,7 @@ const btnDanger = { borderRadius: 8, padding: "8px 16px", fontWeight: 700, color
 const uid = () => crypto.randomUUID();
 
 const emptyStat = (partidoId, jugadorId) => {
-  const s = { id: uid("s"), partido_id: partidoId, jugador_id: jugadorId };
+  const s = { id: uid("s"), partido_id: partidoId, jugador_id: jugadorId, dorsal: null };
   STAT_FIELDS.forEach((f) => { s[f.key] = 0; });
   return s;
 };
@@ -103,6 +111,7 @@ export default function App({ canEdit = false, userEmail = null, onLogin, onLogo
   const [view, setView] = useState({ name: "home" });
   const [toast, setToast] = useState(null);
   const [saveState, setSaveState] = useState("idle");
+  const [saveError, setSaveError] = useState("");
   const [ligaId, setLigaId] = useState(null);
 
   const pendingRef = useRef(null);
@@ -132,27 +141,62 @@ export default function App({ canEdit = false, userEmail = null, onLogin, onLogo
     if (data === null) return;
     savingRef.current = true;
     pendingRef.current = null;
-    let ok = false;
+    let ok = false, lastErr = null;
     for (let attempt = 0; attempt < 3 && !ok; attempt++) {
       try {
         await saveDiff(syncedRef.current, data);
         syncedRef.current = data;
         ok = true;
-      } catch (e) { ok = false; }
+      } catch (e) {
+        lastErr = e;
+        console.error("Error al guardar:", e);
+        if (esErrorDePermiso(e)) break; // reintentar no sirve: hay que volver a ingresar
+      }
       if (!ok) await new Promise((r) => setTimeout(r, 700 * (attempt + 1)));
     }
     savingRef.current = false;
     if (!ok) {
-      if (pendingRef.current === null) pendingRef.current = data;
+      if (pendingRef.current === null) pendingRef.current = data; // los cambios no se pierden: quedan pendientes
+      setSaveError(explicarError(lastErr));
       setSaveState("error");
-      timerRef.current = setTimeout(flush, 2500);
+      if (!esErrorDePermiso(lastErr)) timerRef.current = setTimeout(flush, 4000);
       return;
     }
+    setSaveError("");
     if (pendingRef.current !== null) {
       timerRef.current = setTimeout(flush, SAVE_DELAY);
       setSaveState("pending");
-    } else setSaveState("idle");
+    } else {
+      setSaveState("saved");
+      setTimeout(() => setSaveState((st) => (st === "saved" ? "idle" : st)), 2500);
+    }
   }, []);
+
+  // Guardar ya mismo (sin esperar la pausa) cuando el usuario se va, bloquea el celu o cambia de app.
+  useEffect(() => {
+    const guardarYa = () => {
+      if (pendingRef.current === null) return;
+      if (timerRef.current) clearTimeout(timerRef.current);
+      flush();
+    };
+    const alOcultar = () => { if (document.visibilityState === "hidden") guardarYa(); };
+    const alCerrar = (e) => {
+      if (pendingRef.current !== null || savingRef.current) { guardarYa(); e.preventDefault(); e.returnValue = ""; }
+    };
+    document.addEventListener("visibilitychange", alOcultar);
+    window.addEventListener("pagehide", guardarYa);
+    window.addEventListener("beforeunload", alCerrar);
+    return () => {
+      document.removeEventListener("visibilitychange", alOcultar);
+      window.removeEventListener("pagehide", guardarYa);
+      window.removeEventListener("beforeunload", alCerrar);
+    };
+  }, [flush]);
+
+  // Si había cambios sin guardar y el organizador vuelve a ingresar, se guardan solos.
+  useEffect(() => {
+    if (canEdit && pendingRef.current !== null && !savingRef.current) flush();
+  }, [canEdit, flush]);
 
   const commit = useCallback((updater) => {
     if (!canEdit) { setToast("Ingresá como organizador para editar."); return; }
@@ -198,7 +242,7 @@ export default function App({ canEdit = false, userEmail = null, onLogin, onLogo
   return (
     <div style={{ background: PAPER, minHeight: "100dvh", color: "#10151C" }} className="font-sans">
       <TopNav view={view} setView={setView} saveState={saveState} db={db} liga={liga} setLigaId={setLigaId} canEdit={canEdit} userEmail={userEmail} onLogin={onLogin} onLogout={onLogout} />
-      <main className="app-main" style={{ maxWidth: 1000, margin: "0 auto", padding: "16px 16px 64px" }}>
+      <main style={{ maxWidth: 1000, margin: "0 auto", padding: "16px 16px 64px" }}>
         {view.name === "home" && <HomeView {...ctx} />}
         {view.name === "new" && <NewMatchView {...ctx} />}
         {view.name === "matches" && <MatchesView {...ctx} />}
@@ -207,8 +251,18 @@ export default function App({ canEdit = false, userEmail = null, onLogin, onLogo
         {view.name === "stats" && <StatsView {...ctx} />}
         {view.name === "leagues" && <LeaguesView {...ctx} setLigaId={setLigaId} />}
       </main>
+      {saveState === "error" && (
+        <div role="alert" style={{ position: "fixed", left: 12, right: 12, bottom: 12, zIndex: 55, maxWidth: 560, margin: "0 auto", borderRadius: 12, background: "#7A1F1A", color: "white", padding: "12px 14px", boxShadow: "0 8px 24px rgba(0,0,0,0.3)" }}>
+          <p style={{ fontSize: 14, fontWeight: 800 }}>Los cambios no se están guardando</p>
+          <p style={{ marginTop: 2, fontSize: 13, opacity: 0.9 }}>{saveError}</p>
+          <div style={{ marginTop: 10, display: "flex", flexWrap: "wrap", gap: 8 }}>
+            <button type="button" onClick={() => { if (timerRef.current) clearTimeout(timerRef.current); flush(); }} style={{ minHeight: 40, borderRadius: 8, border: "none", background: "white", color: "#7A1F1A", padding: "0 14px", fontWeight: 700, cursor: "pointer" }}>Reintentar ahora</button>
+            <button type="button" onClick={() => { if (window.confirm("Se van a perder los cambios que no se guardaron. ¿Recargar igual?")) { pendingRef.current = null; window.location.reload(); } }} style={{ minHeight: 40, borderRadius: 8, border: "1px solid rgba(255,255,255,0.5)", background: "transparent", color: "white", padding: "0 14px", fontWeight: 600, cursor: "pointer" }}>Descartar y recargar</button>
+          </div>
+        </div>
+      )}
       {toast && (
-        <div className="app-toast" style={{ position: "fixed", left: 0, right: 0, bottom: 16, display: "flex", justifyContent: "center", padding: "0 16px", zIndex: 50 }}>
+        <div style={{ position: "fixed", left: 0, right: 0, bottom: 16, display: "flex", justifyContent: "center", padding: "0 16px", zIndex: 50 }}>
           <div style={{ borderRadius: 8, background: "#10151C", padding: "10px 16px", fontSize: 14, color: "white", boxShadow: "0 4px 12px rgba(0,0,0,0.2)" }}>{toast}</div>
         </div>
       )}
@@ -221,36 +275,59 @@ export default function App({ canEdit = false, userEmail = null, onLogin, onLogo
 function SaveIndicator({ saveState }) {
   if (saveState === "idle") return null;
   const error = saveState === "error";
-  const Icon = error ? CloudOff : Cloud;
+  const saved = saveState === "saved";
+  const Icon = error ? CloudOff : saved ? Check : Cloud;
+  const text = error ? "Sin guardar" : saved ? "Guardado" : "Guardando…";
   return (
-    <span style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0, fontSize: 11, color: error ? "#F0A8A0" : "#9AA7B2" }}>
-      <Icon size={14} /><span>{error ? "Reintentando…" : "Guardando…"}</span>
+    <span role="status" style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0, fontSize: 11, fontWeight: 600, color: error ? "#F0A8A0" : saved ? "#7FD6B0" : "#9AA7B2" }}>
+      <Icon size={14} /><span className="hide-mobile">{text}</span>
     </span>
   );
 }
 
 function TopNav({ view, setView, saveState, db, liga, setLigaId, canEdit, userEmail, onLogin, onLogout }) {
   const items = [
-    { name: "home", label: "Inicio", icon: Home, short: "Inicio" },
-    { name: "new", label: "Nuevo partido", icon: Plus, short: "Nuevo" },
-    { name: "matches", label: "Partidos", icon: ListChecks, short: "Partidos" },
-    { name: "teams", label: "Equipos", icon: Users, short: "Equipos" },
-    { name: "stats", label: "Estadísticas", icon: BarChart3, short: "Stats" },
-    { name: "leagues", label: "Ligas", icon: Shield, short: "Ligas" },
+    { name: "home", label: "Inicio", icon: Home },
+    { name: "new", label: "Nuevo partido", icon: Plus },
+    { name: "matches", label: "Partidos", icon: ListChecks },
+    { name: "teams", label: "Equipos", icon: Users },
+    { name: "stats", label: "Estadísticas", icon: BarChart3 },
+    { name: "leagues", label: "Ligas", icon: Shield },
   ];
   const visible = items.filter((it) => canEdit || it.name !== "new");
+  const titles = { home: "Inicio", new: "Nuevo partido", matches: "Partidos", match: "Partido", teams: "Equipos", stats: "Estadísticas", leagues: "Ligas" };
+  const pageTitle = titles[view.name] || "Estadistik";
+
+  const [menuOpen, setMenuOpen] = useState(false);
+  const touchY = useRef(0);
+  useEffect(() => {
+    if (!menuOpen) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const onKey = (e) => { if (e.key === "Escape") setMenuOpen(false); };
+    const onResize = () => { if (window.innerWidth >= 768) setMenuOpen(false); };
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("resize", onResize);
+    return () => { document.body.style.overflow = prev; window.removeEventListener("keydown", onKey); window.removeEventListener("resize", onResize); };
+  }, [menuOpen]);
+
+  const go = (name) => { setView({ name }); setMenuOpen(false); };
+  const authClick = () => { setMenuOpen(false); (canEdit ? onLogout : onLogin)(); };
+  const iconBtn = { display: "flex", alignItems: "center", justifyContent: "center", height: 44, width: 44, flexShrink: 0, background: "transparent", border: "none", color: "white", cursor: "pointer" };
+
   return (
     <>
-      <header style={{ background: INK, position: "sticky", top: 0, zIndex: 40, paddingTop: "env(safe-area-inset-top, 0px)" }}>
+      {/* ---- Compu: barra superior con menú horizontal ---- */}
+      <header className="topbar-desktop" style={{ background: INK, position: "sticky", top: 0, zIndex: 40 }}>
         <div style={{ maxWidth: 1000, margin: "0 auto", display: "flex", alignItems: "center", gap: 8, padding: "10px 16px" }}>
           <button type="button" onClick={() => setView({ name: "home" })} aria-label="Ir al inicio" style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0, background: "transparent", border: "none", cursor: "pointer" }}>
             <span style={{ display: "flex", height: 32, width: 32, alignItems: "center", justifyContent: "center", borderRadius: 8, background: GOLD, color: INK, fontWeight: 900, fontSize: 13 }}>LK</span>
           </button>
-          <select className="liga-select" value={liga.id} onChange={(e) => { setLigaId(e.target.value); setView({ name: "home" }); }}
+          <select value={liga.id} onChange={(e) => { setLigaId(e.target.value); setView({ name: "home" }); }}
             style={{ flexShrink: 0, borderRadius: 8, border: `1px solid #2A3A4E`, background: "#16263A", color: "white", padding: "7px 10px", fontSize: 13, fontWeight: 600, maxWidth: 190, cursor: "pointer" }}>
             {db.leagues.map((l) => <option key={l.id} value={l.id}>{l.nombre}</option>)}
           </select>
-          <nav className="nav-desktop" style={{ gap: 4, flex: 1 }}>
+          <nav style={{ display: "flex", gap: 4, flex: 1 }}>
             {visible.map((it) => {
               const active = view.name === it.name;
               const Icon = it.icon;
@@ -263,24 +340,71 @@ function TopNav({ view, setView, saveState, db, liga, setLigaId, canEdit, userEm
             })}
           </nav>
           <SaveIndicator saveState={saveState} />
-          <button type="button" onClick={canEdit ? onLogout : onLogin} aria-label={canEdit ? "Cerrar sesión" : "Ingreso de organizadores"} title={canEdit ? userEmail : "Ingreso de organizadores"}
-            style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6, flexShrink: 0, minHeight: 40, minWidth: 40, borderRadius: 8, padding: "8px 12px", fontSize: 13, fontWeight: 600, border: "1px solid #2A3A4E", background: "transparent", color: "#C9D2DB", cursor: "pointer" }}>
-            {canEdit ? <LogOut size={16} /> : <LogIn size={16} />}<span className="hide-mobile">{canEdit ? "Salir" : "Organizadores"}</span>
+          <button type="button" onClick={canEdit ? onLogout : onLogin} title={canEdit ? userEmail : "Ingreso de organizadores"}
+            style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0, borderRadius: 8, padding: "8px 12px", fontSize: 13, fontWeight: 600, border: "1px solid #2A3A4E", background: "transparent", color: "#C9D2DB", cursor: "pointer" }}>
+            {canEdit ? <LogOut size={15} /> : <LogIn size={15} />}<span>{canEdit ? "Salir" : "Organizadores"}</span>
           </button>
         </div>
       </header>
-      <nav className="nav-bottom" aria-label="Navegación principal" style={{ background: INK }}>
-        {visible.map((it) => {
-          const active = view.name === it.name;
-          const Icon = it.icon;
-          return (
-            <button type="button" key={it.name} onClick={() => setView({ name: it.name })} aria-current={active ? "page" : undefined}
-              style={{ color: active ? GOLD : "#9AA7B2" }}>
-              <Icon size={22} strokeWidth={active ? 2.6 : 2} /><span>{it.short}</span>
+
+      {/* ---- Celu: hamburguesa + Estadistik a la izquierda, título de la página centrado ---- */}
+      <header className="topbar-mobile" style={{ background: INK, position: "sticky", top: 0, zIndex: 40, paddingTop: "env(safe-area-inset-top, 0px)" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) auto minmax(0,1fr)", alignItems: "center", gap: 4, padding: "4px 8px", minHeight: 52 }}>
+          <div style={{ display: "flex", alignItems: "center", minWidth: 0 }}>
+            <button type="button" aria-label="Abrir menú" aria-expanded={menuOpen} onClick={() => setMenuOpen(true)} style={iconBtn}><MenuIcon size={26} /></button>
+            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 16, fontWeight: 900, color: GOLD }}>Estadistik</span>
+          </div>
+          <span style={{ whiteSpace: "nowrap", fontSize: 15, fontWeight: 700, color: "white", textAlign: "center" }}>{pageTitle}</span>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 2, minWidth: 0 }}>
+            <SaveIndicator saveState={saveState} />
+            <button type="button" aria-label={canEdit ? "Cerrar sesión" : "Ingreso de organizadores"} onClick={canEdit ? onLogout : onLogin} style={{ ...iconBtn, color: "#C9D2DB" }}>
+              {canEdit ? <LogOut size={20} /> : <LogIn size={20} />}
             </button>
-          );
-        })}
-      </nav>
+          </div>
+        </div>
+      </header>
+
+      {/* ---- Celu: menú a pantalla completa, sube desde abajo ---- */}
+      <div className={`menu-sheet${menuOpen ? " open" : ""}`} role="dialog" aria-modal="true" aria-label="Menú principal" aria-hidden={!menuOpen}
+        style={{ background: INK }}
+        onTouchStart={(e) => { touchY.current = e.touches[0].clientY; }}
+        onTouchEnd={(e) => { if (e.changedTouches[0].clientY - touchY.current > 90) setMenuOpen(false); }}>
+        <div className="menu-panel" style={{ display: "flex", flexDirection: "column", padding: "calc(8px + env(safe-area-inset-top, 0px)) 20px calc(20px + env(safe-area-inset-bottom, 0px))" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <span style={{ display: "flex", height: 34, width: 34, alignItems: "center", justifyContent: "center", borderRadius: 8, background: GOLD, color: INK, fontWeight: 900, fontSize: 13 }}>LK</span>
+              <span style={{ fontSize: 22, fontWeight: 900, color: "white" }}>Estadistik</span>
+            </span>
+            <button type="button" aria-label="Cerrar menú" onClick={() => setMenuOpen(false)} style={iconBtn}><X size={28} /></button>
+          </div>
+
+          <div style={{ flex: 1 }} />
+
+          <label htmlFor="menu-liga" style={{ marginBottom: 6, fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", color: "#9AA7B2" }}>Liga</label>
+          <select id="menu-liga" className="menu-select" value={liga.id} onChange={(e) => { setLigaId(e.target.value); go("home"); }}
+            style={{ width: "100%", minHeight: 50, borderRadius: 12, border: "1px solid #2A3A4E", background: "#16263A", color: "white", padding: "0 14px", fontWeight: 600 }}>
+            {db.leagues.map((l) => <option key={l.id} value={l.id}>{l.nombre}</option>)}
+          </select>
+
+          <nav style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 16 }}>
+            {visible.map((it) => {
+              const active = view.name === it.name || (it.name === "matches" && view.name === "match");
+              const Icon = it.icon;
+              return (
+                <button type="button" key={it.name} onClick={() => go(it.name)} aria-current={active ? "page" : undefined}
+                  style={{ display: "flex", alignItems: "center", gap: 16, minHeight: 60, padding: "0 18px", borderRadius: 14, border: "none", textAlign: "left", fontSize: 20, fontWeight: 600, cursor: "pointer", background: active ? GOLD : "#16263A", color: active ? INK : "white" }}>
+                  <Icon size={24} strokeWidth={2.2} /><span>{it.label}</span>
+                </button>
+              );
+            })}
+          </nav>
+
+          <button type="button" onClick={authClick}
+            style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 10, minHeight: 52, marginTop: 16, borderRadius: 14, border: "1px solid #2A3A4E", background: "transparent", color: "#C9D2DB", fontSize: 16, fontWeight: 600, cursor: "pointer" }}>
+            {canEdit ? <LogOut size={18} /> : <LogIn size={18} />}<span>{canEdit ? "Cerrar sesión" : "Ingreso de organizadores"}</span>
+          </button>
+        </div>
+      </div>
     </>
   );
 }
@@ -300,7 +424,27 @@ function BackBar({ onBack, title, right }) {
 // ---------- helpers ----------
 
 const teamName = (db, id) => db.teams.find((t) => t.id === id)?.nombre || "—";
-const teamsOf = (db, ligaId) => db.teams.filter((t) => t.liga_id === ligaId);
+// Orden alfabético A-Z en español (ignora mayúsculas y tildes).
+const collator = new Intl.Collator("es", { sensitivity: "base", numeric: true });
+// Apellido: lo que va antes de la coma ("Pérez, Juan") o, si no hay coma, la última palabra ("Juan Pérez").
+const apellidoDe = (nombre = "") => {
+  const n = nombre.trim();
+  if (n.includes(",")) return n.split(",")[0].trim();
+  const partes = n.split(/\s+/);
+  return partes[partes.length - 1] || "";
+};
+const porApellido = (a, b) => collator.compare(apellidoDe(a.nombre), apellidoDe(b.nombre)) || collator.compare(a.nombre, b.nombre);
+const porNombre = (a, b) => collator.compare(a.nombre, b.nombre);
+// Cómo se muestra (y se guarda) un jugador: "Apellido, Nombre". "Juan Pérez" pasa a "Pérez, Juan".
+const verNombre = (nombre = "") => {
+  const n = nombre.trim();
+  if (n.includes(",")) return n.replace(/\s*,\s*/, ", ");
+  const partes = n.split(/\s+/);
+  if (partes.length < 2) return n;
+  return `${partes[partes.length - 1]}, ${partes.slice(0, -1).join(" ")}`;
+};
+
+const teamsOf = (db, ligaId) => db.teams.filter((t) => t.liga_id === ligaId).sort(porNombre);
 const matchesOf = (db, ligaId) => db.matches.filter((m) => m.liga_id === ligaId);
 
 function matchScore(db, matchId, teamId) {
@@ -650,6 +794,7 @@ function MatchView({ db, commit, matchId, setView, canEdit }) {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [dorsalTarget, setDorsalTarget] = useState(null);
 
   if (!match) {
     return (<div><BackBar onBack={() => setView({ name: "matches" })} title="Partido" /><EmptyState text="Este partido ya no existe." /></div>);
@@ -660,6 +805,22 @@ function MatchView({ db, commit, matchId, setView, canEdit }) {
   const scoreB = matchScore(db, match.id, match.equipo_b_id);
 
   const getStat = (jugadorId) => readStat(db.stats.find((st) => st.partido_id === matchId && st.jugador_id === jugadorId));
+
+  // Dorsal de un jugador en ESTE partido: el fijado para hoy o, si no hay, el habitual.
+  const dorsalDe = (pl) => db.stats.find((st) => st.partido_id === matchId && st.jugador_id === pl.id)?.dorsal ?? pl.numero ?? null;
+  const otrosDe = (pl) => db.players.filter((o) => o.equipo_id === pl.equipo_id && o.id !== pl.id)
+    .map((o) => ({ nombre: o.nombre, dorsal: dorsalDe(o) })).filter((o) => o.dorsal !== null);
+  const setDorsal = (jugadorId, dorsal) => commit((prev) => {
+    const stats = [...prev.stats];
+    const idx = stats.findIndex((st) => st.partido_id === matchId && st.jugador_id === jugadorId);
+    if (idx === -1) {
+      if (dorsal === null) return prev;
+      stats.push({ ...emptyStat(matchId, jugadorId), dorsal });
+    } else {
+      stats[idx] = { ...readStat(stats[idx]), dorsal };
+    }
+    return { ...prev, stats };
+  });
 
   const bump = (jugadorId, field, delta) => {
     if (finalized) return;
@@ -692,6 +853,8 @@ function MatchView({ db, commit, matchId, setView, canEdit }) {
       matches: prev.matches.map((m) => m.id === matchId
         ? { ...m, estado: "finalizado", resultado_equipo_a: matchScore(prev, matchId, m.equipo_a_id), resultado_equipo_b: matchScore(prev, matchId, m.equipo_b_id) }
         : m),
+      // Al finalizar, el dorsal de cada jugador queda fijo en la historia del partido.
+      stats: prev.stats.map((st) => (st.partido_id === matchId && st.dorsal == null ? { ...st, dorsal: prev.players.find((pl) => pl.id === st.jugador_id)?.numero ?? null } : st)),
     }));
     setConfirmOpen(false);
   };
@@ -730,9 +893,11 @@ function MatchView({ db, commit, matchId, setView, canEdit }) {
         </div>
       </div>
 
+      {canEdit && !finalized && <p style={{ marginBottom: 12, fontSize: 13, color: MUTED }}>Tip: tocá el número de un jugador para cambiar su dorsal solo en este partido.</p>}
+
       <div className="grid gap-6 lg:grid-cols-2">
-        <TeamStatsPanel db={db} teamId={match.equipo_a_id} getStat={getStat} bump={bump} finalized={finalized || !canEdit} color={COLOR_A} setView={setView} />
-        <TeamStatsPanel db={db} teamId={match.equipo_b_id} getStat={getStat} bump={bump} finalized={finalized || !canEdit} color={COLOR_B} setView={setView} />
+        <TeamStatsPanel db={db} teamId={match.equipo_a_id} getStat={getStat} bump={bump} finalized={finalized || !canEdit} color={COLOR_A} setView={setView} onEditDorsal={setDorsalTarget} />
+        <TeamStatsPanel db={db} teamId={match.equipo_b_id} getStat={getStat} bump={bump} finalized={finalized || !canEdit} color={COLOR_B} setView={setView} onEditDorsal={setDorsalTarget} />
       </div>
 
       <div style={{ marginTop: 32, display: "flex", justifyContent: "center" }}>
@@ -757,14 +922,19 @@ function MatchView({ db, commit, matchId, setView, canEdit }) {
           </div>
         </Modal>
       )}
+      {dorsalTarget && (
+        <DorsalModal player={dorsalTarget} habitual={dorsalTarget.numero} actual={db.stats.find((st) => st.partido_id === matchId && st.jugador_id === dorsalTarget.id)?.dorsal ?? null}
+          otros={otrosDe(dorsalTarget)} onClose={() => setDorsalTarget(null)}
+          onSave={(d) => { setDorsal(dorsalTarget.id, d); setDorsalTarget(null); }} />
+      )}
       {editOpen && <EditMatchModal db={db} match={match} commit={commit} onClose={() => setEditOpen(false)} onReopen={reabrir} />}
       {deleteOpen && <DeleteMatchModal db={db} match={match} commit={commit} onClose={() => setDeleteOpen(false)} afterDelete={() => setView({ name: "matches" })} />}
     </div>
   );
 }
 
-function TeamStatsPanel({ db, teamId, getStat, bump, finalized, color, setView }) {
-  const players = db.players.filter((p) => p.equipo_id === teamId).sort((a, b) => a.numero - b.numero);
+function TeamStatsPanel({ db, teamId, getStat, bump, finalized, color, setView, onEditDorsal }) {
+  const players = db.players.filter((p) => p.equipo_id === teamId).sort(porApellido);
   const totals = players.reduce((acc, p) => {
     const s = getStat(p.id);
     STAT_FIELDS.forEach((f) => { acc[f.key] += s[f.key]; });
@@ -784,7 +954,7 @@ function TeamStatsPanel({ db, teamId, getStat, bump, finalized, color, setView }
             action={<button type="button" onClick={() => setView({ name: "teams", teamId })} style={{ ...btnPrimary, marginTop: 12, fontSize: 14 }}>Agregar jugadores</button>} />
         </div>
       ) : (
-        <div>{players.map((p, i) => <PlayerStatRow key={p.id} player={p} stat={getStat(p.id)} bump={bump} finalized={finalized} color={color} isLast={i === players.length - 1} />)}</div>
+        <div>{players.map((p, i) => <PlayerStatRow key={p.id} player={p} stat={getStat(p.id)} bump={bump} finalized={finalized} color={color} isLast={i === players.length - 1} onEditDorsal={onEditDorsal} />)}</div>
       )}
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, borderTop: `1px solid ${LINE}`, padding: "12px 16px" }}>
@@ -810,14 +980,14 @@ function StatStepper({ label, value, onDec, onInc, disabled, color, minValue = 0
   return (
     <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
       <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.03em", color: FAINT }}>{label}</span>
-      <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
         <button type="button" onClick={onDec} disabled={decDisabled}
-          style={{ display: "flex", height: 34, width: 34, alignItems: "center", justifyContent: "center", borderRadius: 8, background: CHIP, color: "#10151C", border: "none", cursor: decDisabled ? "default" : "pointer", opacity: decDisabled ? 0.35 : 1 }}>
+          className="stepper-btn" style={{ display: "flex", alignItems: "center", justifyContent: "center", borderRadius: 8, background: CHIP, color: "#10151C", border: "none", cursor: decDisabled ? "default" : "pointer", opacity: decDisabled ? 0.35 : 1 }}>
           <Minus size={15} />
         </button>
-        <span style={{ width: 22, textAlign: "center", fontFamily: "monospace", fontSize: 17, fontWeight: 700 }}>{value}</span>
+        <span style={{ minWidth: 28, textAlign: "center", fontFamily: "monospace", fontSize: 18, fontWeight: 700 }}>{value}</span>
         <button type="button" onClick={onInc} disabled={disabled}
-          style={{ display: "flex", height: 34, width: 34, alignItems: "center", justifyContent: "center", borderRadius: 8, background: color.bar, color: "white", border: "none", cursor: disabled ? "default" : "pointer", opacity: disabled ? 0.35 : 1 }}>
+          className="stepper-btn" style={{ display: "flex", alignItems: "center", justifyContent: "center", borderRadius: 8, background: color.bar, color: "white", border: "none", cursor: disabled ? "default" : "pointer", opacity: disabled ? 0.35 : 1 }}>
           <Plus size={15} />
         </button>
       </div>
@@ -826,14 +996,23 @@ function StatStepper({ label, value, onDec, onInc, disabled, color, minValue = 0
   );
 }
 
-function PlayerStatRow({ player, stat, bump, finalized, color, isLast }) {
+function PlayerStatRow({ player, stat, bump, finalized, color, isLast, onEditDorsal }) {
+  // Dorsal del partido: el que se fijó para este partido o, si no hay, el habitual del jugador.
+  const dorsal = stat.dorsal ?? player.numero;
+  const cambiado = stat.dorsal != null && stat.dorsal !== player.numero;
+  const badge = { display: "flex", height: 32, minWidth: 36, padding: "0 6px", flexShrink: 0, alignItems: "center", justifyContent: "center", borderRadius: 8, boxSizing: "border-box", background: color.bg, color: color.text, fontFamily: "monospace", fontSize: 14, fontWeight: 800, border: cambiado ? `2px solid ${GOLD}` : "2px solid transparent" };
   return (
     <div style={{ padding: "12px 16px", borderBottom: isLast ? "none" : `1px solid ${LINE}` }}>
       <div style={{ display: "flex", minWidth: 0, alignItems: "center", gap: 8, marginBottom: 8 }}>
-        <span style={{ display: "flex", height: 28, width: 28, flexShrink: 0, alignItems: "center", justifyContent: "center", borderRadius: 6, background: color.bg, color: color.text, fontFamily: "monospace", fontSize: 12, fontWeight: 700 }}>{player.numero}</span>
-        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: 600 }}>{player.nombre}</span>
+        {finalized ? (
+          <span style={badge}>{dorsal ?? "–"}</span>
+        ) : (
+          <button type="button" onClick={() => onEditDorsal(player)} title="Cambiar el dorsal solo en este partido" aria-label={`Dorsal de ${verNombre(player.nombre)}: tocar para cambiarlo`} style={{ ...badge, cursor: "pointer" }}>{dorsal ?? "–"}</button>
+        )}
+        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: 600 }}>{verNombre(player.nombre)}</span>
+        {cambiado && <span style={{ flexShrink: 0, fontSize: 11, color: MUTED }}>habitual {player.numero ?? "–"}</span>}
       </div>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 10, justifyContent: "flex-start" }}>
+      <div className="stat-grid">
         {STAT_FIELDS.map((f) => (
           <StatStepper key={f.key} label={f.short} value={stat[f.key]} disabled={finalized} color={color}
             minValue={f.key === "tiros" ? stat.puntos : 0}
@@ -842,6 +1021,29 @@ function PlayerStatRow({ player, stat, bump, finalized, color, isLast }) {
         ))}
       </div>
     </div>
+  );
+}
+
+function DorsalModal({ player, habitual, actual, otros, onSave, onClose }) {
+  const [valor, setValor] = useState(actual == null ? "" : String(actual));
+  const n = valor === "" ? null : Number(valor);
+  const invalido = valor !== "" && (!Number.isInteger(n) || n < 0);
+  const repetidos = n !== null && !invalido ? otros.filter((o) => o.dorsal === n) : [];
+  const guardar = () => { if (!invalido) onSave(n); };
+  return (
+    <Modal onClose={onClose}>
+      <h3 style={{ marginBottom: 4, fontSize: 18, fontWeight: 800 }}>Dorsal en este partido</h3>
+      <p style={{ marginBottom: 14, fontSize: 14, color: MUTED }}>{verNombre(player.nombre)} · habitual: <strong>{habitual ?? "sin número"}</strong>. El cambio vale solo para este partido.</p>
+      <input type="number" inputMode="numeric" min="0" autoFocus value={valor} onChange={(e) => setValor(e.target.value)} onKeyDown={(e) => e.key === "Enter" && guardar()}
+        placeholder={habitual != null ? `Habitual: ${habitual}` : "Número de hoy"} style={{ ...inputStyle, fontSize: 18, fontFamily: "monospace" }} />
+      {invalido && <p style={{ marginTop: 8, fontSize: 13, color: RED }}>Ingresá un número entero, 0 o mayor.</p>}
+      {repetidos.length > 0 && <p style={{ marginTop: 8, fontSize: 13, color: "#8A6410" }}>Ojo: ese número lo tiene {repetidos.map((o) => verNombre(o.nombre)).join(", ")} en este partido. Podés guardarlo igual.</p>}
+      <div style={{ marginTop: 16, display: "flex", flexWrap: "wrap", justifyContent: "flex-end", gap: 8 }}>
+        <button type="button" onClick={onClose} style={btnGhost}>Cancelar</button>
+        {actual != null && <button type="button" onClick={() => onSave(null)} style={btnGhost}>Volver al habitual</button>}
+        <button type="button" onClick={guardar} style={btnPrimary}>Guardar</button>
+      </div>
+    </Modal>
   );
 }
 
@@ -857,7 +1059,7 @@ function TeamsView({ db, commit, setView, teamId, ligaId, liga, canEdit }) {
   const [nuevoEquipo, setNuevoEquipo] = useState("");
   const [deleteTeam, setDeleteTeam] = useState(null);
 
-  const players = selected ? db.players.filter((p) => p.equipo_id === selected.id).sort((a, b) => a.numero - b.numero) : [];
+  const players = selected ? db.players.filter((p) => p.equipo_id === selected.id).sort(porApellido) : [];
   const resetForm = () => { setForm({ nombre: "", numero: "" }); setEditingId(null); setError(""); };
 
   const agregarEquipo = () => {
@@ -887,13 +1089,14 @@ function TeamsView({ db, commit, setView, teamId, ligaId, liga, canEdit }) {
 
   const submit = () => {
     if (!selected) return;
-    if (!form.nombre.trim() || form.numero === "") { setError("Completá nombre y número."); return; }
-    const numero = Number(form.numero);
-    if (Number.isNaN(numero) || numero < 0) { setError("El número debe ser válido."); return; }
+    if (!form.nombre.trim()) { setError("Completá apellido y nombre."); return; }
+    const numero = form.numero === "" ? null : Number(form.numero);
+    if (numero !== null && (!Number.isInteger(numero) || numero < 0)) { setError("El número debe ser válido."); return; }
+    const nombre = verNombre(form.nombre);
     if (editingId) {
-      commit((prev) => ({ ...prev, players: prev.players.map((p) => (p.id === editingId ? { ...p, nombre: form.nombre.trim(), numero } : p)) }));
+      commit((prev) => ({ ...prev, players: prev.players.map((p) => (p.id === editingId ? { ...p, nombre, numero } : p)) }));
     } else {
-      commit((prev) => ({ ...prev, players: [...prev.players, { id: uid("p"), nombre: form.nombre.trim(), numero, equipo_id: selected.id }] }));
+      commit((prev) => ({ ...prev, players: [...prev.players, { id: uid("p"), nombre, numero, equipo_id: selected.id }] }));
     }
     resetForm();
   };
@@ -945,12 +1148,12 @@ function TeamsView({ db, commit, setView, teamId, ligaId, liga, canEdit }) {
                 {players.map((p, i) => (
                   <div key={p.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "12px 16px", borderBottom: i === players.length - 1 ? "none" : `1px solid ${LINE}` }}>
                     <div style={{ display: "flex", minWidth: 0, alignItems: "center", gap: 8 }}>
-                      <span style={{ display: "flex", height: 28, width: 28, flexShrink: 0, alignItems: "center", justifyContent: "center", borderRadius: 6, background: CHIP, fontFamily: "monospace", fontSize: 12, fontWeight: 700 }}>{p.numero}</span>
-                      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: 600 }}>{p.nombre}</span>
+                      <span style={{ display: "flex", height: 28, width: 28, flexShrink: 0, alignItems: "center", justifyContent: "center", borderRadius: 6, background: CHIP, fontFamily: "monospace", fontSize: 12, fontWeight: 700 }}>{p.numero ?? "–"}</span>
+                      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: 600 }}>{verNombre(p.nombre)}</span>
                     </div>
                     {canEdit && (
                     <div style={{ display: "flex", flexShrink: 0, gap: 4 }}>
-                      <button type="button" onClick={() => { setEditingId(p.id); setForm({ nombre: p.nombre, numero: String(p.numero) }); }} aria-label="Editar" style={{ borderRadius: 6, padding: 8, background: "transparent", border: "none", cursor: "pointer" }}><Pencil size={16} /></button>
+                      <button type="button" onClick={() => { setEditingId(p.id); setForm({ nombre: verNombre(p.nombre), numero: p.numero == null ? "" : String(p.numero) }); }} aria-label="Editar" style={{ borderRadius: 6, padding: 8, background: "transparent", border: "none", cursor: "pointer" }}><Pencil size={16} /></button>
                       <button type="button" onClick={() => setDeleteTarget(p)} aria-label="Eliminar" style={{ borderRadius: 6, padding: 8, background: "transparent", border: "none", cursor: "pointer" }}><Trash2 size={16} color={RED} /></button>
                     </div>
                     )}
@@ -964,12 +1167,12 @@ function TeamsView({ db, commit, setView, teamId, ligaId, liga, canEdit }) {
           <div style={{ ...cardStyle, padding: 16, width: "100%" }} className="lg:w-80 lg:shrink-0">
             <h3 style={{ marginBottom: 12, fontWeight: 800 }}>{editingId ? "Editar jugador" : "Agregar jugador"}</h3>
             <div style={{ marginBottom: 12 }}>
-              <label style={labelStyle}>Nombre y apellido</label>
-              <input type="text" value={form.nombre} onChange={(e) => setForm((f) => ({ ...f, nombre: e.target.value }))} onKeyDown={(e) => e.key === "Enter" && submit()} style={inputStyle} placeholder="Ej: Juan Pérez" />
+              <label style={labelStyle}>Apellido, Nombre</label>
+              <input type="text" value={form.nombre} onChange={(e) => setForm((f) => ({ ...f, nombre: e.target.value }))} onKeyDown={(e) => e.key === "Enter" && submit()} style={inputStyle} placeholder="Ej: Pérez, Juan" />
             </div>
             <div style={{ marginBottom: 12 }}>
-              <label style={labelStyle}>Número de camiseta</label>
-              <input type="number" min="0" value={form.numero} onChange={(e) => setForm((f) => ({ ...f, numero: e.target.value }))} onKeyDown={(e) => e.key === "Enter" && submit()} style={inputStyle} placeholder="Ej: 7" />
+              <label style={labelStyle}>Número de camiseta (opcional)</label>
+              <input type="number" min="0" value={form.numero} onChange={(e) => setForm((f) => ({ ...f, numero: e.target.value }))} onKeyDown={(e) => e.key === "Enter" && submit()} style={inputStyle} placeholder="Ej: 7 (o vacío)" />
             </div>
             {error && <p style={{ marginBottom: 12, fontSize: 14, fontWeight: 500, color: RED }}>{error}</p>}
             <div style={{ display: "flex", gap: 8 }}>
@@ -986,7 +1189,7 @@ function TeamsView({ db, commit, setView, teamId, ligaId, liga, canEdit }) {
       {deleteTarget && (
         <Modal onClose={() => setDeleteTarget(null)}>
           <h3 style={{ marginBottom: 8, fontSize: 18, fontWeight: 800 }}>¿Eliminar jugador?</h3>
-          <p style={{ marginBottom: 20, fontSize: 14, color: MUTED }}>Se eliminará a <strong>{deleteTarget.nombre}</strong> y sus estadísticas en todos los partidos.</p>
+          <p style={{ marginBottom: 20, fontSize: 14, color: MUTED }}>Se eliminará a <strong>{verNombre(deleteTarget.nombre)}</strong> y sus estadísticas en todos los partidos.</p>
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
             <button type="button" onClick={() => setDeleteTarget(null)} style={btnGhost}>Cancelar</button>
             <button type="button" onClick={() => removePlayer(deleteTarget.id)} style={btnDanger}>Eliminar</button>
@@ -1164,7 +1367,7 @@ function StatsView({ db, setView, setToast, ligaId, liga }) {
     const t = db.teams.find((tt) => tt.id === p.equipo_id);
     if (!t || t.liga_id !== ligaId) return false;
     return teamFilter === "todos" || p.equipo_id === teamFilter;
-  });
+  }).sort(porApellido);
 
   const selectStyle = { borderRadius: 8, border: `1px solid ${LINE}`, background: "white", padding: "8px 12px", fontSize: 14, outline: "none" };
   const num = (n) => String(n).replace(".", ",");
@@ -1177,7 +1380,7 @@ function StatsView({ db, setView, setToast, ligaId, liga }) {
       ...STAT_FIELDS.map((f) => `Prom. ${f.label.toLowerCase()}`),
     ]];
     rows.forEach((r) => filas.push([
-      liga.nombre, r.player.nombre, r.player.numero, teamName(db, r.player.equipo_id), r.partidos,
+      liga.nombre, verNombre(r.player.nombre), r.player.numero ?? "", teamName(db, r.player.equipo_id), r.partidos,
       ...STAT_FIELDS.map((f) => r[f.key]),
       num(efectividad(r.puntos, r.tiros).toFixed(1)),
       ...STAT_FIELDS.map((f) => num((r[f.key] / r.partidos).toFixed(1))),
@@ -1206,7 +1409,7 @@ function StatsView({ db, setView, setToast, ligaId, liga }) {
           liga.nombre, fmtFecha(m.fecha), m.hora || "", m.lugar || "",
           teamName(db, m.equipo_a_id), teamName(db, m.equipo_b_id), `${sa}-${sb}`,
           m.estado === "finalizado" ? "Finalizado" : "En curso",
-          p.nombre, p.numero, teamName(db, p.equipo_id),
+          verNombre(p.nombre), s.dorsal ?? p.numero ?? "", teamName(db, p.equipo_id),
           ...STAT_FIELDS.map((f) => s[f.key]),
           num(efectividad(s.puntos, s.tiros).toFixed(1)),
         ]);
@@ -1221,14 +1424,14 @@ function StatsView({ db, setView, setToast, ligaId, liga }) {
     <div>
       <BackBar onBack={() => setView({ name: "home" })} title={`Estadísticas · ${liga.nombre}`} />
 
-      <div style={{ marginBottom: 12, display: "flex", flexWrap: "wrap", gap: 8 }}>
+      <div className="stats-filters" style={{ marginBottom: 12, display: "flex", flexWrap: "wrap", gap: 8 }}>
         <select value={teamFilter} onChange={(e) => { setTeamFilter(e.target.value); setPlayerFilter("todos"); }} style={selectStyle}>
           <option value="todos">Todos los equipos</option>
           {equipos.map((t) => <option key={t.id} value={t.id}>{t.nombre}</option>)}
         </select>
         <select value={playerFilter} onChange={(e) => setPlayerFilter(e.target.value)} style={selectStyle}>
           <option value="todos">Todos los jugadores</option>
-          {playersForFilter.map((p) => <option key={p.id} value={p.id}>{p.nombre}</option>)}
+          {playersForFilter.map((p) => <option key={p.id} value={p.id}>{verNombre(p.nombre)}</option>)}
         </select>
         <select value={seasonFilter} onChange={(e) => setSeasonFilter(e.target.value)} style={selectStyle}>
           <option value="todas">Todas las temporadas</option>
@@ -1236,7 +1439,7 @@ function StatsView({ db, setView, setToast, ligaId, liga }) {
         </select>
       </div>
 
-      <div style={{ marginBottom: 20, display: "flex", flexWrap: "wrap", gap: 8 }}>
+      <div className="stats-export" style={{ marginBottom: 20, display: "flex", flexWrap: "wrap", gap: 8 }}>
         <button type="button" onClick={exportarAcumuladas} style={{ display: "flex", alignItems: "center", gap: 6, borderRadius: 8, padding: "8px 14px", fontSize: 14, fontWeight: 700, color: "white", background: GREEN, border: "none", cursor: "pointer" }}>
           <Download size={16} /> Exportar acumuladas a Excel
         </button>
@@ -1250,7 +1453,40 @@ function StatsView({ db, setView, setToast, ligaId, liga }) {
       ) : rows.length === 0 ? (
         <EmptyState text="No hay datos para los filtros seleccionados." />
       ) : (
-        <div style={{ ...cardStyle, overflowX: "auto" }}>
+        <>
+          <div className="stats-cards">
+            {rows.map((r, i) => {
+              const efect = r.tiros > 0 ? `${efectividad(r.puntos, r.tiros).toFixed(0)}%` : "—";
+              const cell = (label, value, sub, color) => (
+                <div key={label} style={{ borderRadius: 8, background: PAPER, padding: "8px 4px", textAlign: "center" }}>
+                  <p style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.03em", color: FAINT }}>{label}</p>
+                  <p style={{ fontFamily: "monospace", fontSize: 18, fontWeight: 800, color: color || "#10151C" }}>{value}</p>
+                  <p style={{ fontFamily: "monospace", fontSize: 11, color: MUTED }}>{sub}</p>
+                </div>
+              );
+              return (
+                <div key={r.player.id} style={{ ...cardStyle, padding: 14 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
+                    <span style={{ display: "flex", height: 32, width: 32, flexShrink: 0, alignItems: "center", justifyContent: "center", borderRadius: 8, background: i === 0 ? GOLD : CHIP, color: INK, fontFamily: "monospace", fontSize: 14, fontWeight: 800 }}>{i + 1}</span>
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      <p style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: 700 }}>{verNombre(r.player.nombre)}</p>
+                      <p style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 12, color: MUTED }}>{teamName(db, r.player.equipo_id)} · {r.partidos} PJ</p>
+                    </div>
+                    <div style={{ textAlign: "right", flexShrink: 0 }}>
+                      <p style={{ fontFamily: "monospace", fontSize: 24, fontWeight: 900, lineHeight: 1 }}>{r.puntos}</p>
+                      <p style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", color: FAINT }}>Pts · {(r.puntos / r.partidos).toFixed(1)}/P</p>
+                    </div>
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
+                    {STAT_FIELDS.filter((f) => f.key !== "puntos" && f.key !== "tiros").map((f) => cell(f.short, r[f.key], `${(r[f.key] / r.partidos).toFixed(1)}/P`))}
+                    {cell("Tiros", r.tiros, `${(r.tiros / r.partidos).toFixed(1)}/P`)}
+                    {cell("Efect.", efect, `${r.puntos}/${r.tiros}`, r.tiros > 0 ? GREEN : FAINT)}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <div className="stats-table" style={{ ...cardStyle, overflowX: "auto" }}>
           <table style={{ width: "100%", minWidth: 940, fontSize: 14, borderCollapse: "collapse" }}>
             <thead>
               <tr style={{ borderBottom: `1px solid ${LINE}`, textAlign: "left", fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.03em", color: FAINT }}>
@@ -1265,7 +1501,7 @@ function StatsView({ db, setView, setToast, ligaId, liga }) {
             <tbody>
               {rows.map((r, i) => (
                 <tr key={r.player.id} style={{ borderBottom: i === rows.length - 1 ? "none" : `1px solid ${LINE}` }}>
-                  <td style={{ padding: "10px 16px", fontWeight: 600 }}>{r.player.nombre}</td>
+                  <td style={{ padding: "10px 16px", fontWeight: 600 }}>{verNombre(r.player.nombre)}</td>
                   <td style={{ padding: "10px 16px", color: MUTED }}>{teamName(db, r.player.equipo_id)}</td>
                   <td style={{ padding: 10, textAlign: "center", fontFamily: "monospace" }}>{r.partidos}</td>
                   {STAT_FIELDS.map((f) => (
@@ -1282,6 +1518,7 @@ function StatsView({ db, setView, setToast, ligaId, liga }) {
             </tbody>
           </table>
         </div>
+        </>
       )}
       <p style={{ marginTop: 8, fontSize: 12, color: FAINT }}>
         Las columnas con "/P" son promedios por partido. La efectividad es goles sobre tiros intentados. Los archivos exportados respetan los filtros aplicados.
