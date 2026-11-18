@@ -3,7 +3,7 @@ import { supabase } from "./supabase";
 // Columnas de cada tabla. Si sumás una métrica nueva en STAT_FIELDS (App.jsx),
 // agregá también la columna en "stats" acá y en una migración SQL nueva.
 const COLUMNS = {
-  leagues: ["id", "nombre"],
+  leagues: ["id", "nombre", "organizador_id"],
   teams: ["id", "liga_id", "nombre"],
   players: ["id", "equipo_id", "nombre", "numero", "sexo"],
   matches: ["id", "liga_id", "equipo_a_id", "equipo_b_id", "fecha", "hora", "lugar", "estado", "resultado_equipo_a", "resultado_equipo_b", "cambios_a", "cambios_b"],

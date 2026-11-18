@@ -12,7 +12,7 @@ const loginError = (err) => {
 };
 
 export default function Root() {
-  const { session, isOrganizer, checking, orgError, recheck, signIn, signOut } = useAuth();
+  const { session, userId, userRol, isOrganizer, checking, orgError, recheck, signIn, signOut } = useAuth();
   const [showLogin, setShowLogin] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -43,8 +43,10 @@ export default function Root() {
   return (
     <>
       <App
-        canEdit={isOrganizer}
-        userEmail={session?.user?.email}
+        canEdit={Boolean(isOrganizer)}
+        userEmail={session?.user?.email ?? null}
+        userId={userId ?? session?.user?.id ?? null}
+        userRol={userRol ?? "planillero"}
         onLogin={() => setShowLogin(true)}
         onLogout={signOut}
       />
