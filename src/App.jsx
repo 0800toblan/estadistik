@@ -1,32 +1,63 @@
-import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import {
-  Home, Plus, ListChecks, Users, BarChart3, ChevronLeft, Check,
-  Pencil, Trash2, X, MapPin, Calendar, Trophy, Minus, Download, Unlock,
-  CloudOff, Shield, LogIn, LogOut, Loader2, ArrowUpDown, Repeat, Menu as MenuIcon,
-  RotateCcw, AlertTriangle
+  Home,
+  Plus,
+  ListChecks,
+  Users,
+  BarChart3,
+  Shield,
+  KeyRound,
+  LogIn,
+  Loader2,
+  Check,
+  CloudOff,
+  LogOut,
+  Menu as MenuIcon,
+  X,
+  ChevronLeft,
+  Calendar,
+  MapPin,
+  Pencil,
+  Trash2,
+  Eye,
+  EyeOff,
+  UserPlus,
+  Copy,
+  Unlock,
+  Trophy,
+  ArrowUpDown,
+  Minus,
+  Repeat,
+  RotateCcw,
+  AlertTriangle,
+  Download,
+  Sparkles,
+  Shuffle,
 } from "lucide-react";
+import { supabase } from "./lib/supabase";
 import { loadDb, saveDiff } from "./lib/syncDb";
 
-// ============================================================
-// CONFIGURACIÓN DE ESTADÍSTICAS (100% compatible con syncDb.js)
-// ============================================================
+const ADMIN_EMAIL = "toblanqui@outlook.com";
+const isSuperAdmin = (email) => (email || "").trim().toLowerCase() === ADMIN_EMAIL;
+
 const STAT_FIELDS = [
   { key: "puntos", label: "Puntos", short: "Pts" },
-  { key: "asistencias", label: "Asistencias", short: "Asist." },
-  { key: "rebotes", label: "Rebotes", short: "Reb." },
   { key: "tiros", label: "Tiros", short: "Tiros" },
-  { key: "robos", label: "Robos", short: "Robos" },
-  { key: "perdidas", label: "Pérdidas", short: "Pérd." },
+  { key: "asistencias", label: "Asistencias", short: "Asist" },
+  { key: "rebotes", label: "Rebotes", short: "Reb" },
+  { key: "robos", label: "Robos", short: "Rob" },
+  { key: "perdidas", label: "Pérdidas", short: "Pérd" },
 ];
+
+const SEXO = {
+  varon: { sim: "♂", nombre: "Varón", color: "#38BDF8" },
+  mujer: { sim: "♀", nombre: "Mujer", color: "#F472B6" },
+};
 
 const EN_CANCHA = 8;
 const POR_ZONA = 4;
 const POR_SEXO = 2;
 const MAX_CAMBIOS = 8;
-const SEXO = {
-  varon: { sim: "♂", color: "#38BDF8", nombre: "Varón" },
-  mujer: { sim: "♀", color: "#F472B6", nombre: "Mujer" },
-};
 
 const elegirZona = (enCancha, sexo) => {
   const cuenta = (z, sx) => enCancha.filter((x) => x.zona === z && (!sx || x.sexo === sx)).length;
@@ -52,7 +83,7 @@ const esErrorDePermiso = (e) =>
   /jwt|row-level security|permission denied/i.test(e?.message || "");
 
 const explicarError = (e) => {
-  if (esErrorDePermiso(e)) return "Tu sesión venció o no tenés permiso. Volvé a ingresar como organizador y se guardan los cambios pendientes.";
+  if (esErrorDePermiso(e)) return "No tenés permiso para esta acción o tu sesión venció. Revisá tu rol o volvé a iniciar sesión.";
   if (/failed to fetch|network|load failed/i.test(e?.message || "")) return "Sin conexión. Se reintenta solo cuando vuelva internet.";
   return `Error de la base de datos: ${e?.message || "desconocido"}.`;
 };
@@ -199,6 +230,9 @@ export default function App({ canEdit = false, userEmail = null, onLogin, onLogo
   const [saveError, setSaveError] = useState("");
   const [ligaId, setLigaId] = useState(null);
 
+  // isAdmin: true únicamente para toblanqui@outlook.com
+  const isAdmin = canEdit && isSuperAdmin(userEmail);
+
   const pendingRef = useRef(null);
   const timerRef = useRef(null);
   const savingRef = useRef(false);
@@ -324,19 +358,34 @@ export default function App({ canEdit = false, userEmail = null, onLogin, onLogo
   }
 
   const liga = db.leagues.find((l) => l.id === ligaId) || db.leagues[0];
-  const ctx = { db, commit, setView, setToast, liga, ligaId: liga.id, canEdit };
+  const ctx = { db, commit, setView, setToast, liga, ligaId: liga.id, canEdit, isAdmin, userEmail };
 
   return (
     <div style={{ background: INK, minHeight: "100dvh", color: TEXT }}>
-      <TopNav view={view} setView={setView} saveState={saveState} db={db} liga={liga} setLigaId={setLigaId} canEdit={canEdit} userEmail={userEmail} onLogin={onLogin} onLogout={onLogout} />
+      <TopNav
+        view={view}
+        setView={setView}
+        saveState={saveState}
+        db={db}
+        liga={liga}
+        setLigaId={setLigaId}
+        canEdit={canEdit}
+        isAdmin={isAdmin}
+        userEmail={userEmail}
+        onLogin={onLogin}
+        onLogout={onLogout}
+      />
       <main style={{ maxWidth: 1160, margin: "0 auto", padding: "20px 16px 72px" }}>
         {view.name === "home" && <HomeView {...ctx} />}
-        {view.name === "new" && <NewMatchView {...ctx} />}
+        {view.name === "new" && (canEdit ? <NewMatchView {...ctx} /> : <HomeView {...ctx} />)}
         {view.name === "matches" && <MatchesView {...ctx} />}
         {view.name === "match" && <MatchView {...ctx} matchId={view.matchId} />}
         {view.name === "teams" && <TeamsView {...ctx} teamId={view.teamId} />}
         {view.name === "stats" && <StatsView {...ctx} />}
+        {view.name === "standings" && <StandingsView {...ctx} />}
         {view.name === "leagues" && <LeaguesView {...ctx} setLigaId={setLigaId} />}
+        {view.name === "users" && (isAdmin ? <UsersAdminView {...ctx} /> : <HomeView {...ctx} />)}
+        {view.name === "fixture" && (isAdmin ? <FixtureGeneratorView {...ctx} /> : <HomeView {...ctx} />)}
       </main>
 
       {saveState === "error" && (
@@ -363,17 +412,32 @@ export default function App({ canEdit = false, userEmail = null, onLogin, onLogo
 
 // ---------- nav ----------
 
-function TopNav({ view, setView, saveState, db, liga, setLigaId, canEdit, userEmail, onLogin, onLogout }) {
+function TopNav({ view, setView, saveState, db, liga, setLigaId, canEdit, isAdmin, userEmail, onLogin, onLogout }) {
   const items = [
     { name: "home", label: "Inicio", icon: Home },
     { name: "new", label: "Nuevo", icon: Plus },
     { name: "matches", label: "Partidos", icon: ListChecks },
     { name: "teams", label: "Equipos", icon: Users },
     { name: "stats", label: "Estadísticas", icon: BarChart3 },
+    { name: "standings", label: "Posiciones", icon: Trophy },
     { name: "leagues", label: "Ligas", icon: Shield },
+    { name: "users", label: "Usuarios", icon: KeyRound },
   ];
-  const visible = items.filter((it) => canEdit || it.name !== "new");
-  const titles = { home: "INICIO", new: "NUEVO PARTIDO", matches: "PARTIDOS", match: "EN VIVO", teams: "EQUIPOS", stats: "ESTADÍSTICAS", leagues: "LIGAS" };
+  const visible = items.filter((it) => {
+    if (it.name === "new") return canEdit;
+    if (it.name === "users") return isAdmin;
+    return true;
+  });
+  const titles = {
+    home: "INICIO",
+    new: "NUEVO PARTIDO",
+    matches: "PARTIDOS",
+    match: "EN VIVO",
+    teams: "EQUIPOS",
+    stats: "ESTADÍSTICAS",
+    leagues: "LIGAS",
+    users: "USUARIOS",
+  };
   const pageTitle = titles[view.name] || "ESTADISTIK";
 
   const st = saveState === "error" ? "error" : saveState === "saved" ? "saved" : saveState === "pending" ? "pending" : "idle";
@@ -422,7 +486,7 @@ function TopNav({ view, setView, saveState, db, liga, setLigaId, canEdit, userEm
           </button>
           <select value={liga.id} onChange={(e) => { setLigaId(e.target.value); setView({ name: "home" }); }}
             className="font-mono-tech"
-            style={{ flexShrink: 0, border: `1px solid ${LINE}`, background: INK, color: TEXT, padding: "7px 10px", fontSize: 12, fontWeight: 600, maxWidth: 220, cursor: "pointer" }}>
+            style={{ flexShrink: 0, border: `1px solid ${LINE}`, background: INK, color: TEXT, padding: "7px 10px", fontSize: 12, fontWeight: 600, maxWidth: 210, cursor: "pointer" }}>
             {db.leagues.map((l) => <option key={l.id} value={l.id}>{l.nombre}</option>)}
           </select>
           <nav style={{ display: "flex", gap: 2, flex: 1 }}>
@@ -432,15 +496,20 @@ function TopNav({ view, setView, saveState, db, liga, setLigaId, canEdit, userEm
               return (
                 <button type="button" key={it.name} onClick={() => setView({ name: it.name })}
                   className="font-mono-tech"
-                  style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0, padding: "8px 12px", fontSize: 12, fontWeight: active ? 800 : 500, textTransform: "uppercase", border: "none", cursor: "pointer", background: active ? FLUOR : "transparent", color: active ? INK : MUTED }}>
+                  style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0, padding: "8px 11px", fontSize: 12, fontWeight: active ? 800 : 500, textTransform: "uppercase", border: "none", cursor: "pointer", background: active ? FLUOR : "transparent", color: active ? INK : MUTED }}>
                   <Icon size={14} strokeWidth={2.3} /><span>{it.label}</span>
                 </button>
               );
             })}
           </nav>
+          {canEdit && (
+            <span className="font-mono-tech" style={{ padding: "4px 8px", fontSize: 10, fontWeight: 800, background: isAdmin ? `${FLUOR}1A` : ELEVATED, color: isAdmin ? FLUOR : MUTED, border: `1px solid ${isAdmin ? FLUOR : LINE}` }}>
+              {isAdmin ? "ADMIN" : "PLANILLERO"}
+            </span>
+          )}
           <button type="button" onClick={authClick} disabled={st === "pending"} aria-busy={st === "pending"} title={canEdit && st === "idle" ? userEmail : undefined}
             className="font-mono-tech"
-            style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6, flexShrink: 0, minWidth: 140, padding: "8px 12px", fontSize: 11, fontWeight: 700, letterSpacing: "0.06em", border: `1px solid ${canEdit ? FLUOR : LINE}`, background: INK, color: authColor, cursor: st === "pending" ? "default" : "pointer" }}>
+            style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6, flexShrink: 0, minWidth: 124, padding: "8px 12px", fontSize: 11, fontWeight: 700, letterSpacing: "0.06em", border: `1px solid ${canEdit ? FLUOR : LINE}`, background: INK, color: authColor, cursor: st === "pending" ? "default" : "pointer" }}>
             {authIcon(14)}<span>{authLabel}</span>
           </button>
         </div>
@@ -476,6 +545,12 @@ function TopNav({ view, setView, saveState, db, liga, setLigaId, canEdit, userEm
 
           <div style={{ flex: 1 }} />
 
+          {canEdit && (
+            <div className="font-mono-tech" style={{ marginBottom: 12, padding: "8px 12px", border: `1px solid ${isAdmin ? FLUOR : LINE}`, background: SURFACE, fontSize: 11, color: isAdmin ? FLUOR : MUTED }}>
+              ROL: <strong>{isAdmin ? "ADMINISTRADOR" : "PLANILLERO"}</strong> ({userEmail})
+            </div>
+          )}
+
           <label htmlFor="menu-liga" className="font-mono-tech" style={{ marginBottom: 6, fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", color: MUTED }}>LIGA_ACTIVA</label>
           <select id="menu-liga" className="menu-select font-mono-tech" value={liga.id} onChange={(e) => { setLigaId(e.target.value); go("home"); }}
             style={{ width: "100%", minHeight: 48, border: `1px solid ${LINE}`, background: SURFACE, color: TEXT, padding: "0 14px", fontWeight: 600 }}>
@@ -489,7 +564,7 @@ function TopNav({ view, setView, saveState, db, liga, setLigaId, canEdit, userEm
               return (
                 <button type="button" key={it.name} onClick={() => go(it.name)} aria-current={active ? "page" : undefined}
                   className="font-mono-tech"
-                  style={{ display: "flex", alignItems: "center", gap: 16, minHeight: 56, padding: "0 18px", border: "none", textAlign: "left", fontSize: 15, fontWeight: 700, textTransform: "uppercase", cursor: "pointer", background: active ? FLUOR : SURFACE, color: active ? INK : TEXT }}>
+                  style={{ display: "flex", alignItems: "center", gap: 16, minHeight: 54, padding: "0 18px", border: "none", textAlign: "left", fontSize: 15, fontWeight: 700, textTransform: "uppercase", cursor: "pointer", background: active ? FLUOR : SURFACE, color: active ? INK : TEXT }}>
                   <Icon size={20} strokeWidth={2.2} /><span>{it.label}</span>
                 </button>
               );
@@ -590,9 +665,351 @@ function Modal({ children, onClose, wide, disableBackdropClose = false }) {
   );
 }
 
+// ---------- administración de usuarios (solo toblanqui@outlook.com) ----------
+
+function UsersAdminView({ setView, setToast, userEmail }) {
+  const [organizers, setOrganizers] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [showPass, setShowPass] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [error, setError] = useState("");
+  const [ultimoCreado, setUltimoCreado] = useState(null);
+  const [resetTarget, setResetTarget] = useState(null);
+  const [newPass, setNewPass] = useState("");
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [busyAction, setBusyAction] = useState(false);
+
+  const callAdminFn = useCallback(async (body) => {
+    const { data, error: fnErr } = await supabase.functions.invoke("manage-organizers", { body });
+    if (fnErr) {
+      throw new Error(fnErr.message || "No se pudo conectar con la función manage-organizers.");
+    }
+    if (data?.error) {
+      throw new Error(data.error);
+    }
+    return data;
+  }, []);
+
+  const cargarOrganizadores = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const res = await callAdminFn({ action: "list" });
+      setOrganizers(res.organizers || []);
+    } catch (e) {
+      setError(e.message || "Error al cargar los organizadores.");
+    } finally {
+      setLoading(false);
+    }
+  }, [callAdminFn]);
+
+  useEffect(() => {
+    cargarOrganizadores();
+  }, [cargarOrganizadores]);
+
+  const generarClave = () => {
+    const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnprstuvwxyz23456789";
+    let out = "Korf-";
+    for (let i = 0; i < 6; i++) out += chars[Math.floor(Math.random() * chars.length)];
+    setPassword(out);
+    setShowPass(true);
+  };
+
+  const crearUsuario = async (e) => {
+    e.preventDefault();
+    const cleanEmail = email.trim().toLowerCase();
+    if (!cleanEmail || !cleanEmail.includes("@")) {
+      setError("Ingresá un correo electrónico válido.");
+      return;
+    }
+    if (password.length < 6) {
+      setError("La contraseña debe tener al menos 6 caracteres.");
+      return;
+    }
+
+    setCreating(true);
+    setError("");
+    try {
+      await callAdminFn({ action: "create", email: cleanEmail, password });
+      setUltimoCreado({ email: cleanEmail, password });
+      setEmail("");
+      setPassword("");
+      setToast(`Planillero ${cleanEmail} habilitado.`);
+      await cargarOrganizadores();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const guardarNuevaClave = async () => {
+    if (!resetTarget) return;
+    if (newPass.length < 6) {
+      setToast("La nueva contraseña debe tener al menos 6 caracteres.");
+      return;
+    }
+    setBusyAction(true);
+    try {
+      await callAdminFn({ action: "reset_password", user_id: resetTarget.user_id, password: newPass });
+      setToast(`Contraseña actualizada para ${resetTarget.email}.`);
+      setUltimoCreado({ email: resetTarget.email, password: newPass });
+      setResetTarget(null);
+      setNewPass("");
+    } catch (err) {
+      setToast(`Error: ${err.message}`);
+    } finally {
+      setBusyAction(false);
+    }
+  };
+
+  const eliminarUsuario = async () => {
+    if (!deleteTarget) return;
+    setBusyAction(true);
+    try {
+      await callAdminFn({ action: "delete", user_id: deleteTarget.user_id });
+      setToast(`Acceso revocado para ${deleteTarget.email}.`);
+      setDeleteTarget(null);
+      await cargarOrganizadores();
+    } catch (err) {
+      setToast(`Error: ${err.message}`);
+    } finally {
+      setBusyAction(false);
+    }
+  };
+
+  const copiarCredenciales = (cred) => {
+    const texto = `Acceso ESTADISTIK (Planillero)\nEmail: ${cred.email}\nContraseña: ${cred.password}`;
+    navigator.clipboard?.writeText(texto);
+    setToast("Credenciales copiadas al portapapeles.");
+  };
+
+  return (
+    <div style={{ maxWidth: 880 }}>
+      <BackBar
+        onBack={() => setView({ name: "home" })}
+        title="Gestión de Planilleros"
+        right={
+          <span className="font-mono-tech" style={{ padding: "4px 10px", fontSize: 11, fontWeight: 800, background: `${FLUOR}1A`, color: FLUOR, border: `1px solid ${FLUOR}` }}>
+            ADMIN // {userEmail}
+          </span>
+        }
+      />
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(12, 1fr)", gap: 20, alignItems: "start" }}>
+        <form onSubmit={crearUsuario} className="col-span-12 lg:col-span-5" style={{ ...cardStyle, padding: 20, display: "flex", flexDirection: "column", gap: 14 }}>
+          <div style={{ borderBottom: `1px solid ${LINE}`, paddingBottom: 10 }}>
+            <p className="font-mono-tech" style={{ fontSize: 10, color: FLUOR, letterSpacing: "0.1em" }}>[01] ALTA DE CUENTA</p>
+            <h2 className="font-display" style={{ fontSize: 18, fontWeight: 900, textTransform: "uppercase", marginTop: 2 }}>
+              NUEVO PLANILLERO
+            </h2>
+          </div>
+
+          <div>
+            <label style={labelStyle}>Email asignado</label>
+            <input
+              type="email"
+              required
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="planillero@club.com"
+              style={inputStyle}
+            />
+          </div>
+
+          <div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+              <label style={{ ...labelStyle, marginBottom: 0 }}>Contraseña (mín. 6 caracteres)</label>
+              <button
+                type="button"
+                onClick={generarClave}
+                className="font-mono-tech"
+                style={{ background: "transparent", border: "none", padding: 0, fontSize: 10, fontWeight: 800, color: FLUOR, cursor: "pointer", textDecoration: "underline" }}
+              >
+                [GENERAR CLAVE]
+              </button>
+            </div>
+            <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
+              <input
+                type={showPass ? "text" : "password"}
+                required
+                minLength={6}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="••••••••"
+                style={{ ...inputStyle, paddingRight: 40, fontFamily: "'JetBrains Mono', monospace" }}
+              />
+              <button
+                type="button"
+                onClick={() => setShowPass((v) => !v)}
+                aria-label={showPass ? "Ocultar contraseña" : "Ver contraseña"}
+                style={{ position: "absolute", right: 8, background: "transparent", border: "none", color: MUTED, cursor: "pointer", padding: 4 }}
+              >
+                {showPass ? <EyeOff size={16} /> : <Eye size={16} />}
+              </button>
+            </div>
+          </div>
+
+          {error && (
+            <div className="font-mono-tech" style={{ border: `1px solid ${RED}`, background: "#2A1010", padding: "10px 12px", fontSize: 11, color: RED, wordBreak: "break-word" }}>
+              [ERR] {error}
+            </div>
+          )}
+
+          <button type="submit" disabled={creating} style={{ ...btnPrimary, display: "flex", alignItems: "center", justifyContent: "center", gap: 8, width: "100%", padding: "12px 16px", opacity: creating ? 0.6 : 1 }}>
+            <UserPlus size={15} /> {creating ? "CREANDO CUENTA..." : "CREAR Y HABILITAR"}
+          </button>
+
+          {ultimoCreado && (
+            <div style={{ border: `1px solid ${FLUOR}`, background: INK, padding: 12 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                <span className="font-mono-tech" style={{ fontSize: 10, fontWeight: 800, color: FLUOR }}>CREDENCIALES LISTAS</span>
+                <button
+                  type="button"
+                  onClick={() => copiarCredenciales(ultimoCreado)}
+                  className="font-mono-tech"
+                  style={{ display: "flex", alignItems: "center", gap: 4, background: FLUOR, color: INK, border: "none", padding: "4px 8px", fontSize: 10, fontWeight: 800, cursor: "pointer" }}
+                >
+                  <Copy size={11} /> COPIAR
+                </button>
+              </div>
+              <p className="font-mono-tech" style={{ fontSize: 12, color: TEXT }}>Email: <strong>{ultimoCreado.email}</strong></p>
+              <p className="font-mono-tech" style={{ fontSize: 12, color: FLUOR }}>Clave: <strong>{ultimoCreado.password}</strong></p>
+            </div>
+          )}
+        </form>
+
+        <div className="col-span-12 lg:col-span-7" style={cardStyle}>
+          <div style={{ borderBottom: `1px solid ${LINE}`, padding: "14px 18px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div>
+              <p className="font-mono-tech" style={{ fontSize: 10, color: MUTED, letterSpacing: "0.1em" }}>[02] TABLA PUBLIC.ORGANIZERS</p>
+              <h2 className="font-display" style={{ fontSize: 18, fontWeight: 900, textTransform: "uppercase", marginTop: 2 }}>
+                CUENTAS HABILITADAS ({organizers.length})
+              </h2>
+            </div>
+            <button type="button" onClick={cargarOrganizadores} disabled={loading} style={{ ...btnGhost, padding: "6px 10px", fontSize: 11 }}>
+              {loading ? "..." : "ACTUALIZAR"}
+            </button>
+          </div>
+
+          {loading ? (
+            <div style={{ padding: 28, textAlign: "center" }}>
+              <p className="font-mono-tech" style={{ fontSize: 12, color: MUTED }}>CARGANDO USUARIOS...</p>
+            </div>
+          ) : organizers.length === 0 ? (
+            <div style={{ padding: 18 }}>
+              <EmptyState text="No se encontraron usuarios o falta desplegar la Edge Function 'manage-organizers'." />
+            </div>
+          ) : (
+            <div>
+              {organizers.map((org, idx) => {
+                const esPrincipal = isSuperAdmin(org.email);
+                return (
+                  <div
+                    key={org.user_id}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      gap: 12,
+                      padding: "14px 18px",
+                      borderBottom: idx === organizers.length - 1 ? "none" : `1px solid ${LINE}`,
+                      background: esPrincipal ? ELEVATED : "transparent",
+                    }}
+                  >
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                        <span style={{ fontWeight: 700, fontSize: 14, color: TEXT, wordBreak: "break-all" }}>{org.email}</span>
+                        <span className="font-mono-tech" style={{ fontSize: 10, fontWeight: 800, background: esPrincipal ? FLUOR : INK, color: esPrincipal ? INK : MUTED, border: `1px solid ${esPrincipal ? FLUOR : LINE}`, padding: "2px 6px" }}>
+                          {esPrincipal ? "ADMIN PRINCIPAL" : "PLANILLERO"}
+                        </span>
+                      </div>
+                      <p className="font-mono-tech" style={{ fontSize: 11, color: MUTED, marginTop: 4 }}>
+                        ID: {org.user_id.slice(0, 8)}… · Último acceso: {org.last_sign_in_at ? fmtFecha(org.last_sign_in_at.slice(0, 10)) : "Nunca"}
+                      </p>
+                    </div>
+
+                    {!esPrincipal && (
+                      <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                        <button
+                          type="button"
+                          onClick={() => { setResetTarget(org); setNewPass(""); }}
+                          title="Cambiar contraseña"
+                          className="font-mono-tech"
+                          style={{ display: "flex", alignItems: "center", gap: 4, padding: "7px 10px", fontSize: 11, fontWeight: 700, background: ELEVATED, color: TEXT, border: `1px solid ${LINE}`, cursor: "pointer" }}
+                        >
+                          <KeyRound size={13} /> CLAVE
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setDeleteTarget(org)}
+                          title="Revocar acceso y eliminar usuario"
+                          style={{ padding: "7px 10px", background: "transparent", border: `1px solid ${LINE}`, cursor: "pointer" }}
+                        >
+                          <Trash2 size={14} color={RED} />
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {resetTarget && (
+        <Modal onClose={() => setResetTarget(null)}>
+          <h3 className="font-display" style={{ marginBottom: 6, fontSize: 20, fontWeight: 900, textTransform: "uppercase" }}>
+            Cambiar contraseña
+          </h3>
+          <p style={{ marginBottom: 14, fontSize: 13, color: MUTED }}>
+            Nueva clave de acceso para <strong style={{ color: TEXT }}>{resetTarget.email}</strong>:
+          </p>
+          <input
+            type="text"
+            minLength={6}
+            autoFocus
+            value={newPass}
+            onChange={(e) => setNewPass(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && guardarNuevaClave()}
+            placeholder="Mínimo 6 caracteres"
+            style={{ ...inputStyle, fontFamily: "'JetBrains Mono', monospace" }}
+          />
+          <div style={{ marginTop: 16, display: "flex", justifyContent: "flex-end", gap: 8 }}>
+            <button type="button" onClick={() => setResetTarget(null)} style={btnGhost}>Cancelar</button>
+            <button type="button" disabled={busyAction} onClick={guardarNuevaClave} style={btnPrimary}>
+              {busyAction ? "GUARDANDO..." : "ACTUALIZAR CLAVE"}
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {deleteTarget && (
+        <Modal onClose={() => setDeleteTarget(null)}>
+          <h3 className="font-display" style={{ marginBottom: 8, fontSize: 20, fontWeight: 900, textTransform: "uppercase" }}>
+            ¿Eliminar planillero?
+          </h3>
+          <p style={{ marginBottom: 20, fontSize: 14, color: MUTED }}>
+            Se revocará el permiso de edición y se eliminará la cuenta de <strong style={{ color: TEXT }}>{deleteTarget.email}</strong>. Los partidos que haya cargado no se borran.
+          </p>
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+            <button type="button" onClick={() => setDeleteTarget(null)} style={btnGhost}>Cancelar</button>
+            <button type="button" disabled={busyAction} onClick={eliminarUsuario} style={btnDanger}>
+              {busyAction ? "ELIMINANDO..." : "ELIMINAR USUARIO"}
+            </button>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
 // ---------- home (Bento Grid Suizo) ----------
 
-function HomeView({ db, setView, liga, ligaId, canEdit }) {
+function HomeView({ db, setView, liga, ligaId, canEdit, isAdmin }) {
   const partidos = matchesOf(db, ligaId);
   const enCurso = partidos.filter((m) => m.estado === "en_curso");
   const finalizados = partidos.filter((m) => m.estado === "finalizado");
@@ -678,7 +1095,7 @@ function HomeView({ db, setView, liga, ligaId, canEdit }) {
         <h2 className="font-mono-tech" style={{ marginBottom: 8, fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.12em", color: MUTED }}>04 // EQUIPOS DE LA LIGA</h2>
         {equipos.length === 0 ? (
           <EmptyState text="Esta liga no tiene equipos todavía."
-            action={canEdit ? <button type="button" onClick={() => setView({ name: "teams" })} style={{ ...btnPrimary, marginTop: 12 }}>Agregar equipos</button> : null} />
+            action={isAdmin ? <button type="button" onClick={() => setView({ name: "teams" })} style={{ ...btnPrimary, marginTop: 12 }}>Agregar equipos</button> : null} />
         ) : (
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 1, background: LINE, border: `1px solid ${LINE}` }}>
             {equipos.map((t) => (
@@ -725,9 +1142,9 @@ function MatchCard({ db, match, onClick, onEdit, onDelete }) {
   );
 }
 
-// ---------- new match ----------
+// ---------- new match (Opción 1.B: Planillero y Admin pueden crear) ----------
 
-function NewMatchView({ db, commit, setView, ligaId }) {
+function NewMatchView({ db, commit, setView, ligaId, isAdmin }) {
   const equipos = teamsOf(db, ligaId);
   const [equipoA, setEquipoA] = useState("");
   const [equipoB, setEquipoB] = useState("");
@@ -752,8 +1169,12 @@ function NewMatchView({ db, commit, setView, ligaId }) {
     <div style={{ maxWidth: 540 }}>
       <BackBar onBack={() => setView({ name: "home" })} title="Nuevo partido" />
       {equipos.length < 2 ? (
-        <EmptyState text="Necesitás al menos dos equipos en esta liga para crear un partido."
-          action={<button type="button" onClick={() => setView({ name: "teams" })} style={{ ...btnPrimary, marginTop: 12 }}>Ir a Equipos</button>} />
+        <EmptyState
+          text={isAdmin
+            ? "Necesitás al menos dos equipos en esta liga para crear un partido."
+            : "Esta liga aún no tiene suficientes equipos cargados. Pedile al administrador que los agregue."}
+          action={isAdmin ? <button type="button" onClick={() => setView({ name: "teams" })} style={{ ...btnPrimary, marginTop: 12 }}>Ir a Equipos</button> : null}
+        />
       ) : (
         <div style={{ ...cardStyle, padding: 22, display: "flex", flexDirection: "column", gap: 16 }}>
           <div>
@@ -794,9 +1215,12 @@ function NewMatchView({ db, commit, setView, ligaId }) {
 
 // ---------- edit / delete match ----------
 
-function EditMatchModal({ db, match, commit, onClose, onReopen }) {
+function EditMatchModal({ db, match, commit, onClose, onReopen, isAdmin }) {
   const equipos = teamsOf(db, match.liga_id);
   const finalized = match.estado === "finalizado";
+  const tieneStats = db.stats.some((s) => s.partido_id === match.id);
+  const bloquearEquipos = !isAdmin && (finalized || tieneStats);
+
   const [equipoA, setEquipoA] = useState(match.equipo_a_id);
   const [equipoB, setEquipoB] = useState(match.equipo_b_id);
   const [fecha, setFecha] = useState(match.fecha);
@@ -806,6 +1230,8 @@ function EditMatchModal({ db, match, commit, onClose, onReopen }) {
   const cambioDeEquipos = equipoA !== match.equipo_a_id || equipoB !== match.equipo_b_id;
 
   const guardar = () => {
+    if (finalized && !isAdmin) return;
+    if (cambioDeEquipos && bloquearEquipos) return;
     if (!equipoA || !equipoB) { setError("Elegí los dos equipos."); return; }
     if (equipoA === equipoB) { setError("El equipo local y el visitante no pueden ser el mismo."); return; }
     commit((prev) => ({
@@ -829,38 +1255,42 @@ function EditMatchModal({ db, match, commit, onClose, onReopen }) {
       <h3 className="font-display" style={{ marginBottom: 12, fontSize: 20, fontWeight: 900, textTransform: "uppercase" }}>Editar partido</h3>
       {finalized && (
         <div style={{ marginBottom: 16, border: `1px solid ${GOLD}`, background: `${GOLD}18`, padding: "10px 12px" }}>
-          <p style={{ fontSize: 13, color: GOLD, marginBottom: 8 }}>
-            Partido finalizado. Para corregir puntos o estadísticas de jugadores, primero debés reabrirlo.
+          <p style={{ fontSize: 13, color: GOLD, marginBottom: isAdmin ? 8 : 0 }}>
+            {isAdmin
+              ? "Partido finalizado. Para corregir puntos o estadísticas de jugadores, primero debés reabrirlo."
+              : "Este partido ya fue finalizado. Solo el administrador principal puede reabrirlo o modificarlo."}
           </p>
-          <button type="button" onClick={() => { onReopen(); onClose(); }} className="font-mono-tech" style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 12px", fontSize: 11, fontWeight: 700, color: INK, background: GOLD, border: "none", cursor: "pointer" }}>
-            <Unlock size={14} /> REABRIR PARA EDITAR ESTADÍSTICAS
-          </button>
+          {isAdmin && (
+            <button type="button" onClick={() => { onReopen(); onClose(); }} className="font-mono-tech" style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 12px", fontSize: 11, fontWeight: 700, color: INK, background: GOLD, border: "none", cursor: "pointer" }}>
+              <Unlock size={14} /> REABRIR PARA EDITAR ESTADÍSTICAS
+            </button>
+          )}
         </div>
       )}
       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
         <div>
           <label style={labelStyle}>Equipo local</label>
-          <select value={equipoA} onChange={(e) => setEquipoA(e.target.value)} style={inputStyle}>
+          <select value={equipoA} disabled={bloquearEquipos} onChange={(e) => setEquipoA(e.target.value)} style={inputStyle}>
             {equipos.map((t) => <option key={t.id} value={t.id} disabled={t.id === equipoB}>{t.nombre}</option>)}
           </select>
         </div>
         <div>
           <label style={labelStyle}>Equipo visitante</label>
-          <select value={equipoB} onChange={(e) => setEquipoB(e.target.value)} style={inputStyle}>
+          <select value={equipoB} disabled={bloquearEquipos} onChange={(e) => setEquipoB(e.target.value)} style={inputStyle}>
             {equipos.map((t) => <option key={t.id} value={t.id} disabled={t.id === equipoA}>{t.nombre}</option>)}
           </select>
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-          <div><label style={labelStyle}>Fecha</label><input type="date" value={fecha} onChange={(e) => setFecha(e.target.value)} style={inputStyle} /></div>
-          <div><label style={labelStyle}>Hora</label><input type="time" value={hora} onChange={(e) => setHora(e.target.value)} style={inputStyle} /></div>
+          <div><label style={labelStyle}>Fecha</label><input type="date" disabled={finalized && !isAdmin} value={fecha} onChange={(e) => setFecha(e.target.value)} style={inputStyle} /></div>
+          <div><label style={labelStyle}>Hora</label><input type="time" disabled={finalized && !isAdmin} value={hora} onChange={(e) => setHora(e.target.value)} style={inputStyle} /></div>
         </div>
-        <div><label style={labelStyle}>Lugar</label><input type="text" value={lugar} onChange={(e) => setLugar(e.target.value)} style={inputStyle} /></div>
+        <div><label style={labelStyle}>Lugar</label><input type="text" disabled={finalized && !isAdmin} value={lugar} onChange={(e) => setLugar(e.target.value)} style={inputStyle} /></div>
         {cambioDeEquipos && <p style={{ fontSize: 12, color: GOLD, border: `1px solid ${GOLD}`, padding: "8px 10px" }}>Al cambiar los equipos se borrarán las estadísticas de los equipos que salen del partido.</p>}
         {error && <p className="font-mono-tech" style={{ fontSize: 12, color: RED }}>{error}</p>}
       </div>
       <div style={{ marginTop: 18, display: "flex", justifyContent: "flex-end", gap: 8 }}>
         <button type="button" onClick={onClose} style={btnGhost}>Cancelar</button>
-        <button type="button" onClick={guardar} style={btnPrimary}>Guardar cambios</button>
+        {(!finalized || isAdmin) && <button type="button" onClick={guardar} style={btnPrimary}>Guardar cambios</button>}
       </div>
     </Modal>
   );
@@ -890,46 +1320,128 @@ function DeleteMatchModal({ db, match, commit, onClose, afterDelete }) {
   );
 }
 
-// ---------- matches list ----------
+// ---------- listado de partidos organizado por rondas / fechas ----------
 
-function MatchesView({ db, commit, setView, ligaId, canEdit }) {
+function MatchesView({ db, commit, setView, ligaId, canEdit, isAdmin }) {
   const [filter, setFilter] = useState("todos");
   const [editTarget, setEditTarget] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
-  const reabrirDesdeListado = (matchId) => commit((prev) => ({ ...prev, matches: prev.matches.map((m) => (m.id === matchId ? { ...m, estado: "en_curso" } : m)) }));
-  const sorted = [...matchesOf(db, ligaId)].sort((a, b) => (b.fecha + (b.hora || "")).localeCompare(a.fecha + (a.hora || "")));
+
+  const reabrirDesdeListado = (matchId) => {
+    if (!isAdmin) return;
+    commit((prev) => ({ ...prev, matches: prev.matches.map((m) => (m.id === matchId ? { ...m, estado: "en_curso" } : m)) }));
+  };
+
+  const partidosLiga = matchesOf(db, ligaId);
+  const sorted = [...partidosLiga].sort((a, b) => (a.fecha + (a.hora || "")).localeCompare(b.fecha + (b.hora || "")));
   const list = sorted.filter((m) => (filter === "todos" ? true : m.estado === filter));
+
+  // Agrupar partidos por Fecha / Jornada (por campo `fecha`)
+  const rondasAgrupadas = useMemo(() => {
+    const map = new Map();
+    list.forEach((m) => {
+      const key = m.fecha || "Sin fecha";
+      if (!map.has(key)) map.set(key, []);
+      map.get(key).push(m);
+    });
+
+    const entries = Array.from(map.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+    return entries.map(([fecha, matches], idx) => ({
+      nroRonda: idx + 1,
+      fecha,
+      matches,
+    }));
+  }, [list]);
 
   return (
     <div>
-      <BackBar onBack={() => setView({ name: "home" })} title="Partidos" />
+      <BackBar
+        onBack={() => setView({ name: "home" })}
+        title="Partidos"
+        right={
+          isAdmin ? (
+            <button
+              type="button"
+              onClick={() => setView({ name: "fixture" })}
+              style={{ ...btnPrimary, display: "flex", alignItems: "center", gap: 6, padding: "8px 12px" }}
+            >
+              <Sparkles size={14} /> GENERAR FIXTURE
+            </button>
+          ) : null
+        }
+      />
+
       <div style={{ marginBottom: 16, display: "inline-flex", border: `1px solid ${LINE}`, background: SURFACE, padding: 3 }}>
         {[["todos", "Todos"], ["en_curso", "En curso"], ["finalizado", "Finalizados"]].map(([val, label]) => (
-          <button type="button" key={val} onClick={() => setFilter(val)}
+          <button
+            type="button"
+            key={val}
+            onClick={() => setFilter(val)}
             className="font-mono-tech"
-            style={{ padding: "6px 14px", fontSize: 12, fontWeight: 700, textTransform: "uppercase", cursor: "pointer", background: filter === val ? FLUOR : "transparent", color: filter === val ? INK : MUTED, border: "none" }}>
+            style={{ padding: "6px 14px", fontSize: 12, fontWeight: 700, textTransform: "uppercase", cursor: "pointer", background: filter === val ? FLUOR : "transparent", color: filter === val ? INK : MUTED, border: "none" }}
+          >
             {label}
           </button>
         ))}
       </div>
-      {list.length === 0 ? <EmptyState text="No hay partidos para este filtro." /> : (
-        <div className="grid gap-3 sm:grid-cols-2">
-          {list.map((m) => (
-            <MatchCard key={m.id} db={db} match={m}
-              onClick={() => setView({ name: "match", matchId: m.id })}
-              onEdit={canEdit ? () => setEditTarget(m) : undefined} onDelete={canEdit ? () => setDeleteTarget(m) : undefined} />
+
+      {rondasAgrupadas.length === 0 ? (
+        <EmptyState text="No hay partidos para este filtro." />
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+          {rondasAgrupadas.map((ronda) => (
+            <div key={ronda.fecha} style={cardStyle}>
+              {/* Encabezado de la Ronda / Fecha */}
+              <div style={{ borderBottom: `1px solid ${LINE}`, padding: "12px 18px", background: ELEVATED, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+                <span className="font-mono-tech" style={{ fontSize: 13, fontWeight: 900, color: FLUOR }}>
+                  RONDA / FECHA {String(ronda.nroRonda).padStart(2, "0")}
+                </span>
+                <span className="font-mono-tech" style={{ fontSize: 11, color: MUTED }}>
+                  📅 {fmtFecha(ronda.fecha)} · {ronda.matches.length} {ronda.matches.length === 1 ? "partido" : "partidos"} en el día
+                </span>
+              </div>
+
+              {/* Grilla de partidos de esa fecha */}
+              <div style={{ padding: 12, display: "grid", gap: 10, gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))" }}>
+                {ronda.matches.map((m) => {
+                  const puedeEditarEste = isAdmin || (canEdit && m.estado === "en_curso");
+                  return (
+                    <MatchCard
+                      key={m.id}
+                      db={db}
+                      match={m}
+                      onClick={() => setView({ name: "match", matchId: m.id })}
+                      onEdit={puedeEditarEste ? () => setEditTarget(m) : undefined}
+                      onDelete={isAdmin ? () => setDeleteTarget(m) : undefined}
+                    />
+                  );
+                })}
+              </div>
+            </div>
           ))}
         </div>
       )}
-      {editTarget && <EditMatchModal db={db} match={db.matches.find((m) => m.id === editTarget.id) || editTarget} commit={commit} onClose={() => setEditTarget(null)} onReopen={() => reabrirDesdeListado(editTarget.id)} />}
-      {deleteTarget && <DeleteMatchModal db={db} match={deleteTarget} commit={commit} onClose={() => setDeleteTarget(null)} />}
+
+      {editTarget && (
+        <EditMatchModal
+          db={db}
+          match={db.matches.find((m) => m.id === editTarget.id) || editTarget}
+          commit={commit}
+          onClose={() => setEditTarget(null)}
+          onReopen={() => reabrirDesdeListado(editTarget.id)}
+          isAdmin={isAdmin}
+        />
+      )}
+      {deleteTarget && isAdmin && (
+        <DeleteMatchModal db={db} match={deleteTarget} commit={commit} onClose={() => setDeleteTarget(null)} />
+      )}
     </div>
   );
 }
 
-// ---------- live match ----------
+// ---------- live match (Opción 1.B) ----------
 
-function MatchView({ db, commit, matchId, setView, canEdit, setToast }) {
+function MatchView({ db, commit, matchId, setView, canEdit, isAdmin, setToast }) {
   const match = db.matches.find((m) => m.id === matchId);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
@@ -942,6 +1454,7 @@ function MatchView({ db, commit, matchId, setView, canEdit, setToast }) {
   }
 
   const finalized = match.estado === "finalizado";
+  const canEditMatchMeta = isAdmin || (canEdit && !finalized);
   const scoreA = matchScore(db, match.id, match.equipo_a_id);
   const scoreB = matchScore(db, match.id, match.equipo_b_id);
 
@@ -965,6 +1478,37 @@ function MatchView({ db, commit, matchId, setView, canEdit, setToast }) {
 
   const bump = (jugadorId, field, delta) => {
     if (finalized) return;
+    const jugador = db.players.find((p) => p.id === jugadorId);
+    if (!jugador) return;
+
+    const teamPlayerIds = new Set(
+      db.players.filter((p) => p.equipo_id === jugador.equipo_id).map((p) => p.id)
+    );
+    let teamPuntos = 0;
+    let teamAsistencias = 0;
+    for (const st of db.stats) {
+      if (st.partido_id === matchId && teamPlayerIds.has(st.jugador_id)) {
+        const r = readStat(st);
+        teamPuntos += r.puntos;
+        teamAsistencias += r.asistencias;
+      }
+    }
+
+    if (field === "asistencias" && delta > 0 && teamAsistencias + delta > teamPuntos) {
+      setToast(`No puede haber más asistencias (${teamAsistencias + delta}) que puntos del equipo (${teamPuntos}).`);
+      return;
+    }
+
+    if (field === "puntos" && delta < 0) {
+      const cur = getStat(jugadorId);
+      const nextPuntos = Math.max(0, cur.puntos + delta);
+      const realDelta = nextPuntos - cur.puntos;
+      if (realDelta < 0 && teamPuntos + realDelta < teamAsistencias) {
+        setToast(`No podés restar el gol: el equipo tiene ${teamAsistencias} asistencia(s) y quedaría con ${teamPuntos + realDelta} punto(s). Restá una asistencia primero.`);
+        return;
+      }
+    }
+
     commit((prev) => {
       const stats = [...prev.stats];
       const idx = stats.findIndex((s) => s.partido_id === matchId && s.jugador_id === jugadorId);
@@ -982,7 +1526,6 @@ function MatchView({ db, commit, matchId, setView, canEdit, setToast }) {
         base[field] = Math.max(0, base[field] + delta);
       }
 
-      // Expulsión automática: tarjeta roja directa o acumulación de 2 amarillas
       if (delta > 0 && (field === "rojas" || (field === "amarillas" && base.amarillas >= 2))) {
         base.en_cancha = false;
         base.zona = null;
@@ -993,7 +1536,6 @@ function MatchView({ db, commit, matchId, setView, canEdit, setToast }) {
     });
   };
 
-  // Revierte roja directa o segunda amarilla y reincorpora si hay lugar en cancha
   const revertirExpulsion = (jugadorId) => {
     if (finalized) return;
     let reingresoCancha = false;
@@ -1040,7 +1582,6 @@ function MatchView({ db, commit, matchId, setView, canEdit, setToast }) {
     }
   };
 
-  // Envía a un jugador al banco liberando su zona (el reemplazo se decide en el modal obligatorio)
   const mandarABanca = (jugadorId) => {
     if (finalized) return;
     commit((prev) => ({
@@ -1051,7 +1592,6 @@ function MatchView({ db, commit, matchId, setView, canEdit, setToast }) {
     }));
   };
 
-  // Ingreso a cancha desde banco: con zona explícita (si viene de un cambio) o calculada automáticamente
   const entrar = (jugadorId, saleId, zonaDestino = null, contarCambio = false) => {
     if (finalized) return;
     commit((prev) => {
@@ -1112,7 +1652,10 @@ function MatchView({ db, commit, matchId, setView, canEdit, setToast }) {
     }));
   };
 
-  const setSexo = (jugadorId, sexo) => commit((prev) => ({ ...prev, players: prev.players.map((x) => (x.id === jugadorId ? { ...x, sexo } : x)) }));
+  const setSexo = (jugadorId, sexo) => {
+    if (!isAdmin) return;
+    commit((prev) => ({ ...prev, players: prev.players.map((x) => (x.id === jugadorId ? { ...x, sexo } : x)) }));
+  };
 
   const ajustarCambios = (equipoKey, delta) => {
     if (finalized) return;
@@ -1125,15 +1668,24 @@ function MatchView({ db, commit, matchId, setView, canEdit, setToast }) {
   const finalize = () => {
     commit((prev) => ({
       ...prev,
+      stats: prev.stats.map((st) => (st.partido_id === matchId ? { ...st, en_cancha: false, zona: null, dorsal: st.dorsal ?? prev.players.find((pl) => pl.id === st.jugador_id)?.numero ?? null } : st)),
+    }));
+    commit((prev) => ({
+      ...prev,
       matches: prev.matches.map((m) => m.id === matchId
         ? { ...m, estado: "finalizado", resultado_equipo_a: matchScore(prev, matchId, m.equipo_a_id), resultado_equipo_b: matchScore(prev, matchId, m.equipo_b_id) }
         : m),
-      stats: prev.stats.map((st) => (st.partido_id === matchId ? { ...st, en_cancha: false, zona: null, dorsal: st.dorsal ?? prev.players.find((pl) => pl.id === st.jugador_id)?.numero ?? null } : st)),
     }));
     setConfirmOpen(false);
   };
 
-  const reabrir = () => commit((prev) => ({ ...prev, matches: prev.matches.map((m) => (m.id === matchId ? { ...m, estado: "en_curso" } : m)) }));
+  const reabrir = () => {
+    if (!isAdmin) {
+      setToast("Solo el administrador principal puede reabrir un partido finalizado.");
+      return;
+    }
+    commit((prev) => ({ ...prev, matches: prev.matches.map((m) => (m.id === matchId ? { ...m, estado: "en_curso" } : m)) }));
+  };
 
   return (
     <div>
@@ -1143,13 +1695,21 @@ function MatchView({ db, commit, matchId, setView, canEdit, setToast }) {
             <span className="font-mono-tech" style={{ padding: "4px 10px", fontSize: 11, fontWeight: 700, background: finalized ? SURFACE : `${FLUOR}1A`, color: finalized ? MUTED : FLUOR, border: `1px solid ${finalized ? LINE : FLUOR}` }}>
               {finalized ? "FINALIZADO" : "EN CURSO"}
             </span>
-            {canEdit && finalized && (
+            {isAdmin && finalized && (
               <button type="button" onClick={reabrir} title="Reabrir para editar estadísticas" className="font-mono-tech" style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 10px", fontSize: 11, fontWeight: 700, color: INK, background: FLUOR, border: "none", cursor: "pointer" }}>
                 <Unlock size={13} /> REABRIR
               </button>
             )}
-            {canEdit && <button type="button" onClick={() => setEditOpen(true)} title="Editar datos del partido" style={{ padding: 8, background: SURFACE, color: TEXT, border: `1px solid ${LINE}`, cursor: "pointer" }}><Pencil size={15} /></button>}
-            {canEdit && <button type="button" onClick={() => setDeleteOpen(true)} title="Borrar partido" style={{ padding: 8, background: "transparent", border: `1px solid ${LINE}`, cursor: "pointer" }}><Trash2 size={15} color={RED} /></button>}
+            {canEditMatchMeta && (
+              <button type="button" onClick={() => setEditOpen(true)} title="Editar datos del partido" style={{ padding: 8, background: SURFACE, color: TEXT, border: `1px solid ${LINE}`, cursor: "pointer" }}>
+                <Pencil size={15} />
+              </button>
+            )}
+            {isAdmin && (
+              <button type="button" onClick={() => setDeleteOpen(true)} title="Borrar partido (Solo Admin)" style={{ padding: 8, background: "transparent", border: `1px solid ${LINE}`, cursor: "pointer" }}>
+                <Trash2 size={15} color={RED} />
+              </button>
+            )}
           </div>
         } />
 
@@ -1179,6 +1739,12 @@ function MatchView({ db, commit, matchId, setView, canEdit, setToast }) {
         </p>
       )}
 
+      {canEdit && finalized && !isAdmin && (
+        <div className="font-mono-tech" style={{ marginBottom: 14, border: `1px solid ${GOLD}`, background: `${GOLD}14`, padding: "10px 14px", fontSize: 11, color: GOLD }}>
+          [PARTIDO CERRADO] ESTA PLANILLA YA FUE FINALIZADA. SI NECESITÁS REABRIRLA PARA CORREGIR ALGO, PEDISELO AL ADMINISTRADOR ({ADMIN_EMAIL}).
+        </div>
+      )}
+
       <div className="team-tabs" role="tablist">
         {[["a", match.equipo_a_id, COLOR_A], ["b", match.equipo_b_id, COLOR_B]].map(([k, tid, col]) => (
           <button key={k} type="button" role="tab" aria-selected={tab === k} onClick={() => setTab(k)}
@@ -1191,20 +1757,22 @@ function MatchView({ db, commit, matchId, setView, canEdit, setToast }) {
 
       <div className="grid gap-6 lg:grid-cols-2" style={{ alignItems: "start" }}>
         <div className="team-panel" data-active={tab === "a"}>
-          <LiveTeamPanel db={db} match={match} teamId={match.equipo_a_id} equipoKey="a" color={COLOR_A} readOnly={finalized || !canEdit}
+          <LiveTeamPanel db={db} match={match} teamId={match.equipo_a_id} equipoKey="a" color={COLOR_A} readOnly={finalized || !canEdit} canAddPlayers={canEdit} isAdmin={isAdmin}
             getStat={getStat} bump={bump} entrar={entrar} mandarABanca={mandarABanca} revertirExpulsion={revertirExpulsion} ajustarCambios={ajustarCambios} onEditDorsal={setDorsalTarget} setView={setView} setToast={setToast} rotarZonas={rotarZonas} moverZona={moverZona} setSexo={setSexo} />
         </div>
         <div className="team-panel" data-active={tab === "b"}>
-          <LiveTeamPanel db={db} match={match} teamId={match.equipo_b_id} equipoKey="b" color={COLOR_B} readOnly={finalized || !canEdit}
+          <LiveTeamPanel db={db} match={match} teamId={match.equipo_b_id} equipoKey="b" color={COLOR_B} readOnly={finalized || !canEdit} canAddPlayers={canEdit} isAdmin={isAdmin}
             getStat={getStat} bump={bump} entrar={entrar} mandarABanca={mandarABanca} revertirExpulsion={revertirExpulsion} ajustarCambios={ajustarCambios} onEditDorsal={setDorsalTarget} setView={setView} setToast={setToast} rotarZonas={rotarZonas} moverZona={moverZona} setSexo={setSexo} />
         </div>
       </div>
 
       <div style={{ marginTop: 32, display: "flex", justifyContent: "center" }}>
         {!canEdit ? null : finalized ? (
-          <button type="button" onClick={reabrir} style={{ ...btnGhost, display: "flex", alignItems: "center", gap: 8, padding: "12px 20px" }}>
-            <Unlock size={16} /> Reabrir para corregir estadísticas
-          </button>
+          isAdmin ? (
+            <button type="button" onClick={reabrir} style={{ ...btnGhost, display: "flex", alignItems: "center", gap: 8, padding: "12px 20px" }}>
+              <Unlock size={16} /> Reabrir para corregir estadísticas
+            </button>
+          ) : null
         ) : (
           <button type="button" onClick={() => setConfirmOpen(true)} style={{ ...btnDanger, display: "flex", alignItems: "center", gap: 8, padding: "14px 24px", fontSize: 13 }}>
             <Trophy size={16} /> Finalizar partido
@@ -1215,7 +1783,11 @@ function MatchView({ db, commit, matchId, setView, canEdit, setToast }) {
       {confirmOpen && (
         <Modal onClose={() => setConfirmOpen(false)}>
           <h3 className="font-display" style={{ marginBottom: 8, fontSize: 20, fontWeight: 900, textTransform: "uppercase" }}>¿Finalizar el partido?</h3>
-          <p style={{ marginBottom: 20, fontSize: 14, color: MUTED }}>Las estadísticas quedarán guardadas en Supabase. Si necesitás corregir algo más adelante, vas a poder reabrirlo desde esta pantalla.</p>
+          <p style={{ marginBottom: 20, fontSize: 14, color: MUTED }}>
+            {isAdmin
+              ? "Las estadísticas quedarán guardadas en Supabase. Si necesitás corregir algo más adelante, vas a poder reabrirlo desde esta pantalla."
+              : "Las estadísticas quedarán cerradas oficialmente. Una vez finalizado, solo el administrador principal podrá reabrirlo."}
+          </p>
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
             <button type="button" onClick={() => setConfirmOpen(false)} style={btnGhost}>Cancelar</button>
             <button type="button" onClick={finalize} style={btnDanger}>Finalizar partido</button>
@@ -1227,8 +1799,8 @@ function MatchView({ db, commit, matchId, setView, canEdit, setToast }) {
           otros={otrosDe(dorsalTarget)} onClose={() => setDorsalTarget(null)}
           onSave={(d) => { setDorsal(dorsalTarget.id, d); setDorsalTarget(null); }} />
       )}
-      {editOpen && <EditMatchModal db={db} match={match} commit={commit} onClose={() => setEditOpen(false)} onReopen={reabrir} />}
-      {deleteOpen && <DeleteMatchModal db={db} match={match} commit={commit} onClose={() => setDeleteOpen(false)} afterDelete={() => setView({ name: "matches" })} />}
+      {editOpen && <EditMatchModal db={db} match={match} commit={commit} onClose={() => setEditOpen(false)} onReopen={reabrir} isAdmin={isAdmin} />}
+      {deleteOpen && isAdmin && <DeleteMatchModal db={db} match={match} commit={commit} onClose={() => setDeleteOpen(false)} afterDelete={() => setView({ name: "matches" })} />}
     </div>
   );
 }
@@ -1317,14 +1889,14 @@ function FilaJugador({ p, s, color, selected, onSelect, onEditDorsal, right, ate
 }
 
 function LiveTeamPanel({
-  db, match, teamId, equipoKey, color, readOnly,
+  db, match, teamId, equipoKey, color, readOnly, canAddPlayers, isAdmin,
   getStat, bump, entrar, mandarABanca, revertirExpulsion,
   ajustarCambios, onEditDorsal, setView, setToast, rotarZonas, moverZona, setSexo
 }) {
   const [selId, setSelId] = useState(null);
   const [corregir, setCorregir] = useState(false);
   const [entraId, setEntraId] = useState(null);
-  const [cambioPendiente, setCambioPendiente] = useState(null); // { sale: Player, zona: "ataque" | "defensa" | null }
+  const [cambioPendiente, setCambioPendiente] = useState(null);
   const [verTodos, setVerTodos] = useState(false);
 
   const players = db.players.filter((p) => p.equipo_id === teamId).sort(porApellido);
@@ -1344,6 +1916,11 @@ function LiveTeamPanel({
     (a, x) => ({ fp: a.fp + x.s.free_pass, pen: a.pen + x.s.penales, am: a.am + x.s.amarillas, ro: a.ro + x.s.rojas }),
     { fp: 0, pen: 0, am: 0, ro: 0 }
   );
+
+  const teamPuntos = info.reduce((sum, x) => sum + x.s.puntos, 0);
+  const teamAsistencias = info.reduce((sum, x) => sum + x.s.asistencias, 0);
+  const sinCupoAsist = teamAsistencias >= teamPuntos;
+
   const dorsalDe = (x) => x.s.dorsal ?? x.p.numero ?? "–";
 
   const aplicar = (a) => {
@@ -1361,7 +1938,6 @@ function LiveTeamPanel({
     }
   };
 
-  // Inicia un cambio desde la cancha: envía al jugador al banco y exige elegir reemplazo (o confirmar jugar con 1 menos)
   const iniciarCambio = (x) => {
     const zonaActual = x.s.zona || null;
     mandarABanca(x.p.id);
@@ -1431,12 +2007,10 @@ function LiveTeamPanel({
     );
   };
 
-  // Candidatos para modal de ingreso desde banco (cuando ya hay 8 en cancha)
   const entraJugador = entraId ? players.find((p) => p.id === entraId) : null;
   const mismoSexoEntra = (x) => !entraJugador?.sexo || !x.p.sexo || x.p.sexo === entraJugador.sexo;
   const candidatosSalida = verTodos ? enCancha : enCancha.filter(mismoSexoEntra);
 
-  // Candidatos para modal obligatorio cuando sale alguien de cancha hacia el banco
   const suplentesHabilitados = resto.filter((x) => !estaExpulsado(x.s) && x.p.id !== cambioPendiente?.sale.id);
   const mismoSexoCambio = (x) => !cambioPendiente?.sale.sexo || !x.p.sexo || x.p.sexo === cambioPendiente.sale.sexo;
   const candidatosIngreso = verTodos ? suplentesHabilitados : suplentesHabilitados.filter(mismoSexoCambio);
@@ -1460,17 +2034,26 @@ function LiveTeamPanel({
           </span>
           <span style={{ whiteSpace: "nowrap" }}>FP {tot.fp} · PEN {tot.pen} · 🟨 {tot.am} · 🟥 {tot.ro}</span>
         </div>
-        {!readOnly && enCancha.length > 0 && (
-          <button type="button" onClick={() => rotarZonas(teamId)} className="font-mono-tech" style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 6, minHeight: 34, border: `1px solid ${color.ring}`, background: INK, padding: "0 12px", fontSize: 11, fontWeight: 700, textTransform: "uppercase", color: color.text, cursor: "pointer" }}>
-            <Repeat size={14} /> ROTAR ZONAS (ATAQUE ⇄ DEFENSA)
-          </button>
+        {!readOnly && (
+          <div style={{ marginTop: 10, display: "flex", flexWrap: "wrap", gap: 8 }}>
+            {enCancha.length > 0 && (
+              <button type="button" onClick={() => rotarZonas(teamId)} className="font-mono-tech" style={{ display: "flex", alignItems: "center", gap: 6, minHeight: 34, border: `1px solid ${color.ring}`, background: INK, padding: "0 12px", fontSize: 11, fontWeight: 700, textTransform: "uppercase", color: color.text, cursor: "pointer" }}>
+                <Repeat size={14} /> ROTAR ZONAS (ATAQUE ⇄ DEFENSA)
+              </button>
+            )}
+            {canAddPlayers && (
+              <button type="button" onClick={() => setView({ name: "teams", teamId })} className="font-mono-tech" style={{ display: "flex", alignItems: "center", gap: 5, minHeight: 34, border: `1px solid ${LINE}`, background: SURFACE, padding: "0 10px", fontSize: 11, fontWeight: 700, textTransform: "uppercase", color: MUTED, cursor: "pointer" }}>
+                <UserPlus size={13} /> + JUGADOR
+              </button>
+            )}
+          </div>
         )}
       </div>
 
       {players.length === 0 ? (
         <div style={{ padding: 16 }}>
           <EmptyState text="Este equipo todavía no tiene jugadores cargados."
-            action={!readOnly ? <button type="button" onClick={() => setView({ name: "teams", teamId })} style={{ ...btnPrimary, marginTop: 12 }}>Agregar jugadores</button> : null} />
+            action={canAddPlayers ? <button type="button" onClick={() => setView({ name: "teams", teamId })} style={{ ...btnPrimary, marginTop: 12 }}>Agregar jugadores</button> : null} />
         </div>
       ) : (
         <div style={{ padding: 12 }}>
@@ -1519,7 +2102,7 @@ function LiveTeamPanel({
                         )
                         : (
                           <span style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
-                            {!x.p.sexo && ["varon", "mujer"].map((k) => (
+                            {isAdmin && !x.p.sexo && ["varon", "mujer"].map((k) => (
                               <button key={k} type="button" aria-label={`Es ${SEXO[k].nombre.toLowerCase()}`} title={`Marcar como ${SEXO[k].nombre.toLowerCase()}`} onClick={() => setSexo(x.p.id, k)} style={{ ...chico, color: SEXO[k].color, fontSize: 15, fontWeight: 800 }}>{SEXO[k].sim}</button>
                             ))}
                             <button type="button" onClick={() => pedirEntrada(x)} className="font-mono-tech" style={{ minHeight: 36, border: "none", padding: "0 12px", fontSize: 11, fontWeight: 800, textTransform: "uppercase", color: "white", background: color.bar, cursor: "pointer" }}>ENTRAR</button>
@@ -1539,21 +2122,29 @@ function LiveTeamPanel({
             <p className="font-mono-tech" style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 12, color: sel ? FLUOR : MUTED }}>
               {sel ? <><strong>#{dorsalDe(sel)}</strong> · {verNombre(sel.p.nombre)}</> : "[SELECCIONÁ UN JUGADOR EN CANCHA]"}
             </p>
-            <button type="button" disabled={!sel} aria-pressed={corregir} onClick={() => setCorregir(!corregir)}
-              className="font-mono-tech"
-              style={{ flexShrink: 0, minHeight: 32, padding: "0 10px", fontSize: 11, fontWeight: 800, textTransform: "uppercase", cursor: sel ? "pointer" : "default", opacity: sel ? 1 : 0.35, border: corregir ? `1px solid ${RED}` : `1px solid ${LINE}`, background: corregir ? "#3A1212" : INK, color: corregir ? RED : TEXT }}>
-              − CORREGIR
-            </button>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+              <span className="font-mono-tech tabular-nums" title="Asistencias registradas / Goles del equipo" style={{ fontSize: 10, fontWeight: 700, color: sinCupoAsist ? MUTED : FLUOR }}>
+                ASIST {teamAsistencias}/{teamPuntos}
+              </span>
+              <button type="button" disabled={!sel} aria-pressed={corregir} onClick={() => setCorregir(!corregir)}
+                className="font-mono-tech"
+                style={{ minHeight: 32, padding: "0 10px", fontSize: 11, fontWeight: 800, textTransform: "uppercase", cursor: sel ? "pointer" : "default", opacity: sel ? 1 : 0.35, border: corregir ? `1px solid ${RED}` : `1px solid ${LINE}`, background: corregir ? "#3A1212" : INK, color: corregir ? RED : TEXT }}>
+                − CORREGIR
+              </button>
+            </div>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 4 }}>
             {ACCIONES.map((a) => {
+              const bloqueadoAsist = !corregir && a.id === "asist" && sinCupoAsist;
+              const disabledBtn = !sel || bloqueadoAsist;
               const isGol = !corregir && a.tono === "gol";
               const bg = corregir ? "#2E1111" : isGol ? FLUOR : a.tono === "amarilla" ? "#332B00" : a.tono === "roja" ? "#331111" : a.tono === "falta" ? "#2E200B" : INK;
               const borde = corregir ? RED : isGol ? FLUOR : a.tono === "amarilla" ? "#EAB308" : a.tono === "roja" ? RED : LINE;
               const fg = isGol ? INK : a.tono === "amarilla" ? "#FACC15" : a.tono === "roja" ? RED : TEXT;
               return (
-                <button key={a.id} type="button" disabled={!sel} onClick={() => aplicar(a)}
-                  style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 2, minHeight: 52, minWidth: 0, padding: "4px 2px", border: `1px solid ${borde}`, background: bg, color: fg, cursor: sel ? "pointer" : "default", opacity: sel ? 1 : 0.4, touchAction: "manipulation" }}>
+                <button key={a.id} type="button" disabled={disabledBtn} onClick={() => aplicar(a)}
+                  title={bloqueadoAsist ? "No puede haber más asistencias que puntos del equipo" : undefined}
+                  style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 2, minHeight: 52, minWidth: 0, padding: "4px 2px", border: `1px solid ${borde}`, background: bg, color: fg, cursor: disabledBtn ? "default" : "pointer", opacity: disabledBtn ? 0.35 : 1, touchAction: "manipulation" }}>
                   <span className="font-mono-tech" style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", whiteSpace: "nowrap" }}>{corregir ? "− " : ""}{a.label}</span>
                   <span className="font-mono-tech tabular-nums" style={{ fontSize: 16, fontWeight: 800 }}>{sel ? a.val(sel.s) : "–"}</span>
                 </button>
@@ -1563,7 +2154,6 @@ function LiveTeamPanel({
         </div>
       )}
 
-      {/* MODAL OBLIGATORIO AL MANDAR UN JUGADOR DE CANCHA A LA BANCA */}
       {cambioPendiente && (
         <Modal onClose={() => {}} disableBackdropClose>
           <div className="font-mono-tech" style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, fontWeight: 800, color: FLUOR, marginBottom: 4 }}>
@@ -1635,7 +2225,6 @@ function LiveTeamPanel({
         </Modal>
       )}
 
-      {/* MODAL DE INGRESO DESDE BANCO CUANDO YA HAY 8 EN CANCHA */}
       {entraJugador && (
         <Modal onClose={() => setEntraId(null)}>
           <h3 className="font-display" style={{ marginBottom: 4, fontSize: 20, fontWeight: 900, textTransform: "uppercase" }}>Sustitución</h3>
@@ -1693,9 +2282,9 @@ function DorsalModal({ player, habitual, actual, otros, onSave, onClose }) {
   );
 }
 
-// ---------- teams / players ----------
+// ---------- teams / players (Opción 2.B: Planillero solo agrega jugadores; Admin edita/borra) ----------
 
-function TeamsView({ db, commit, setView, teamId, ligaId, liga, canEdit }) {
+function TeamsView({ db, commit, setView, teamId, ligaId, liga, canEdit, isAdmin, setToast }) {
   const equipos = teamsOf(db, ligaId);
   const selected = equipos.find((t) => t.id === teamId) || equipos[0] || null;
   const [form, setForm] = useState({ nombre: "", numero: "", sexo: "" });
@@ -1709,6 +2298,7 @@ function TeamsView({ db, commit, setView, teamId, ligaId, liga, canEdit }) {
   const resetForm = () => { setForm({ nombre: "", numero: "", sexo: "" }); setEditingId(null); setError(""); };
 
   const agregarEquipo = () => {
+    if (!isAdmin) return;
     const nombre = nuevoEquipo.trim();
     if (!nombre) return;
     const id = uid("t");
@@ -1718,6 +2308,7 @@ function TeamsView({ db, commit, setView, teamId, ligaId, liga, canEdit }) {
   };
 
   const borrarEquipo = (team) => {
+    if (!isAdmin) return;
     commit((prev) => {
       const jugadores = prev.players.filter((p) => p.equipo_id === team.id).map((p) => p.id);
       const partidos = prev.matches.filter((m) => m.equipo_a_id === team.id || m.equipo_b_id === team.id).map((m) => m.id);
@@ -1734,20 +2325,27 @@ function TeamsView({ db, commit, setView, teamId, ligaId, liga, canEdit }) {
   };
 
   const submit = () => {
-    if (!selected) return;
+    if (!selected || !canEdit) return;
     if (!form.nombre.trim()) { setError("Completá apellido y nombre."); return; }
     const numero = form.numero === "" ? null : Number(form.numero);
     if (numero !== null && (!Number.isInteger(numero) || numero < 0)) { setError("El número debe ser válido."); return; }
     const nombre = verNombre(form.nombre);
     if (editingId) {
+      if (!isAdmin) {
+        setToast("Solo el administrador principal puede modificar jugadores existentes.");
+        resetForm();
+        return;
+      }
       commit((prev) => ({ ...prev, players: prev.players.map((p) => (p.id === editingId ? { ...p, nombre, numero, sexo: form.sexo || null } : p)) }));
     } else {
       commit((prev) => ({ ...prev, players: [...prev.players, { id: uid("p"), nombre, numero, sexo: form.sexo || null, equipo_id: selected.id }] }));
+      setToast(`Jugador ${nombre} agregado a ${selected.nombre}.`);
     }
     resetForm();
   };
 
   const removePlayer = (id) => {
+    if (!isAdmin) return;
     commit((prev) => ({ ...prev, players: prev.players.filter((p) => p.id !== id), stats: prev.stats.filter((s) => s.jugador_id !== id) }));
     setDeleteTarget(null);
     if (editingId === id) resetForm();
@@ -1767,7 +2365,7 @@ function TeamsView({ db, commit, setView, teamId, ligaId, liga, canEdit }) {
         ))}
       </div>
 
-      {canEdit && (
+      {isAdmin && (
         <div style={{ marginBottom: 20, display: "flex", gap: 8, flexWrap: "wrap" }}>
           <input type="text" value={nuevoEquipo} onChange={(e) => setNuevoEquipo(e.target.value)} onKeyDown={(e) => e.key === "Enter" && agregarEquipo()}
             placeholder="Nombre del nuevo equipo" style={{ ...inputStyle, width: 250, padding: "8px 12px" }} />
@@ -1783,7 +2381,7 @@ function TeamsView({ db, commit, setView, teamId, ligaId, liga, canEdit }) {
       )}
 
       {!selected ? (
-        <EmptyState text="Esta liga todavía no tiene equipos. Agregá el primero arriba." />
+        <EmptyState text={isAdmin ? "Esta liga todavía no tiene equipos. Agregá el primero arriba." : "Esta liga todavía no tiene equipos cargados."} />
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 20 }} className="lg:flex-row lg:items-start">
           <div style={{ ...cardStyle, flex: 1, minWidth: 0 }}>
@@ -1804,7 +2402,7 @@ function TeamsView({ db, commit, setView, teamId, ligaId, liga, canEdit }) {
                         {verNombre(p.nombre)}
                       </span>
                     </div>
-                    {canEdit && (
+                    {isAdmin && (
                       <div style={{ display: "flex", flexShrink: 0, gap: 4 }}>
                         <button type="button" onClick={() => { setEditingId(p.id); setForm({ nombre: verNombre(p.nombre), numero: p.numero == null ? "" : String(p.numero), sexo: p.sexo || "" }); }} aria-label="Editar" style={{ padding: 8, background: "transparent", color: TEXT, border: "none", cursor: "pointer" }}><Pencil size={15} /></button>
                         <button type="button" onClick={() => setDeleteTarget(p)} aria-label="Eliminar" style={{ padding: 8, background: "transparent", border: "none", cursor: "pointer" }}><Trash2 size={15} color={RED} /></button>
@@ -1818,7 +2416,14 @@ function TeamsView({ db, commit, setView, teamId, ligaId, liga, canEdit }) {
 
           {canEdit && (
             <div style={{ ...cardStyle, padding: 18, width: "100%" }} className="lg:w-80 lg:shrink-0">
-              <h3 className="font-display" style={{ marginBottom: 14, fontSize: 17, fontWeight: 900, textTransform: "uppercase" }}>{editingId ? "Editar jugador" : "Agregar jugador"}</h3>
+              <h3 className="font-display" style={{ marginBottom: 6, fontSize: 17, fontWeight: 900, textTransform: "uppercase" }}>
+                {editingId && isAdmin ? "Editar jugador" : "Agregar jugador"}
+              </h3>
+              {!isAdmin && (
+                <p className="font-mono-tech" style={{ marginBottom: 12, fontSize: 10, color: MUTED, lineHeight: 1.4 }}>
+                  [PLANILLERO] ALTA HABILITADA PARA JUGADORES NUEVOS. EDICIÓN O BAJA SOLO POR ADMIN.
+                </p>
+              )}
               <div style={{ marginBottom: 12 }}>
                 <label style={labelStyle}>Apellido, Nombre</label>
                 <input type="text" value={form.nombre} onChange={(e) => setForm((f) => ({ ...f, nombre: e.target.value }))} onKeyDown={(e) => e.key === "Enter" && submit()} style={inputStyle} placeholder="Ej: Pérez, Juan" />
@@ -1840,16 +2445,16 @@ function TeamsView({ db, commit, setView, teamId, ligaId, liga, canEdit }) {
               {error && <p className="font-mono-tech" style={{ marginBottom: 12, fontSize: 12, color: RED }}>{error}</p>}
               <div style={{ display: "flex", gap: 8 }}>
                 <button type="button" onClick={submit} style={{ ...btnPrimary, display: "flex", flex: 1, alignItems: "center", justifyContent: "center", gap: 6 }}>
-                  <Check size={15} /> {editingId ? "Guardar" : "Agregar"}
+                  <Check size={15} /> {editingId && isAdmin ? "Guardar" : "Agregar"}
                 </button>
-                {editingId && <button type="button" onClick={resetForm} style={{ ...btnGhost, padding: "10px 12px" }}><X size={15} /></button>}
+                {editingId && isAdmin && <button type="button" onClick={resetForm} style={{ ...btnGhost, padding: "10px 12px" }}><X size={15} /></button>}
               </div>
             </div>
           )}
         </div>
       )}
 
-      {deleteTarget && (
+      {deleteTarget && isAdmin && (
         <Modal onClose={() => setDeleteTarget(null)}>
           <h3 className="font-display" style={{ marginBottom: 8, fontSize: 20, fontWeight: 900, textTransform: "uppercase" }}>¿Eliminar jugador?</h3>
           <p style={{ marginBottom: 20, fontSize: 14, color: MUTED }}>Se eliminará a <strong style={{ color: TEXT }}>{verNombre(deleteTarget.nombre)}</strong> y sus estadísticas en todos los partidos.</p>
@@ -1860,7 +2465,7 @@ function TeamsView({ db, commit, setView, teamId, ligaId, liga, canEdit }) {
         </Modal>
       )}
 
-      {deleteTeam && (
+      {deleteTeam && isAdmin && (
         <Modal onClose={() => setDeleteTeam(null)}>
           <h3 className="font-display" style={{ marginBottom: 8, fontSize: 20, fontWeight: 900, textTransform: "uppercase" }}>¿Borrar equipo?</h3>
           <p style={{ marginBottom: 20, fontSize: 14, color: MUTED }}>
@@ -1876,15 +2481,16 @@ function TeamsView({ db, commit, setView, teamId, ligaId, liga, canEdit }) {
   );
 }
 
-// ---------- ligas ----------
+// ---------- ligas (Solo Admin crea/edita/borra; Planillero puede cambiar de liga) ----------
 
-function LeaguesView({ db, commit, setView, setLigaId, ligaId, setToast, canEdit }) {
+function LeaguesView({ db, commit, setView, setLigaId, ligaId, setToast, isAdmin }) {
   const [nombre, setNombre] = useState("");
   const [editando, setEditando] = useState(null);
   const [nombreEdit, setNombreEdit] = useState("");
   const [deleteTarget, setDeleteTarget] = useState(null);
 
   const crear = () => {
+    if (!isAdmin) return;
     const n = nombre.trim();
     if (!n) return;
     const id = uid("l");
@@ -1896,6 +2502,7 @@ function LeaguesView({ db, commit, setView, setLigaId, ligaId, setToast, canEdit
   };
 
   const guardarNombre = () => {
+    if (!isAdmin) return;
     const n = nombreEdit.trim();
     if (!n) return;
     commit((prev) => ({ ...prev, leagues: prev.leagues.map((l) => (l.id === editando ? { ...l, nombre: n } : l)) }));
@@ -1903,6 +2510,7 @@ function LeaguesView({ db, commit, setView, setLigaId, ligaId, setToast, canEdit
   };
 
   const borrar = (liga) => {
+    if (!isAdmin) return;
     commit((prev) => {
       const equipos = prev.teams.filter((t) => t.liga_id === liga.id).map((t) => t.id);
       const jugadores = prev.players.filter((p) => equipos.includes(p.equipo_id)).map((p) => p.id);
@@ -1928,7 +2536,7 @@ function LeaguesView({ db, commit, setView, setLigaId, ligaId, setToast, canEdit
         Cada liga tiene sus propios equipos, jugadores, partidos y estadísticas. Cambiá de liga desde el selector del menú superior.
       </p>
 
-      {canEdit && (
+      {isAdmin && (
         <div style={{ marginBottom: 20, display: "flex", gap: 8, flexWrap: "wrap" }}>
           <input type="text" value={nombre} onChange={(e) => setNombre(e.target.value)} onKeyDown={(e) => e.key === "Enter" && crear()}
             placeholder="Nombre de la nueva liga" style={{ ...inputStyle, width: 280, padding: "8px 12px" }} />
@@ -1945,7 +2553,7 @@ function LeaguesView({ db, commit, setView, setLigaId, ligaId, setToast, canEdit
           const activa = l.id === ligaId;
           return (
             <div key={l.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "14px 16px", borderBottom: i === db.leagues.length - 1 ? "none" : `1px solid ${LINE}`, background: activa ? ELEVATED : "transparent" }}>
-              {editando === l.id ? (
+              {editando === l.id && isAdmin ? (
                 <div style={{ display: "flex", gap: 8, flex: 1 }}>
                   <input type="text" value={nombreEdit} onChange={(e) => setNombreEdit(e.target.value)} onKeyDown={(e) => e.key === "Enter" && guardarNombre()} style={{ ...inputStyle, padding: "8px 12px" }} />
                   <button type="button" onClick={guardarNombre} style={{ ...btnPrimary, padding: "8px 12px" }}><Check size={15} /></button>
@@ -1962,8 +2570,8 @@ function LeaguesView({ db, commit, setView, setLigaId, ligaId, setToast, canEdit
                   </div>
                   <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
                     {!activa && <button type="button" onClick={() => { setLigaId(l.id); setView({ name: "home" }); }} style={{ ...btnGhost, fontSize: 11, padding: "6px 12px" }}>USAR</button>}
-                    {canEdit && <button type="button" onClick={() => { setEditando(l.id); setNombreEdit(l.nombre); }} style={{ padding: 8, background: "transparent", color: TEXT, border: "none", cursor: "pointer" }}><Pencil size={15} /></button>}
-                    {canEdit && db.leagues.length > 1 && <button type="button" onClick={() => setDeleteTarget(l)} style={{ padding: 8, background: "transparent", border: "none", cursor: "pointer" }}><Trash2 size={15} color={RED} /></button>}
+                    {isAdmin && <button type="button" onClick={() => { setEditando(l.id); setNombreEdit(l.nombre); }} style={{ padding: 8, background: "transparent", color: TEXT, border: "none", cursor: "pointer" }}><Pencil size={15} /></button>}
+                    {isAdmin && db.leagues.length > 1 && <button type="button" onClick={() => setDeleteTarget(l)} style={{ padding: 8, background: "transparent", border: "none", cursor: "pointer" }}><Trash2 size={15} color={RED} /></button>}
                   </div>
                 </>
               )}
@@ -1972,7 +2580,7 @@ function LeaguesView({ db, commit, setView, setLigaId, ligaId, setToast, canEdit
         })}
       </div>
 
-      {deleteTarget && (
+      {deleteTarget && isAdmin && (
         <Modal onClose={() => setDeleteTarget(null)}>
           <h3 className="font-display" style={{ marginBottom: 8, fontSize: 20, fontWeight: 900, textTransform: "uppercase" }}>¿Borrar liga?</h3>
           <p style={{ marginBottom: 20, fontSize: 14, color: MUTED }}>
@@ -2244,3 +2852,605 @@ function StatsView({ db, setView, setToast, ligaId, liga }) {
     </div>
   );
 }
+
+function sumarDiasISO(fechaISO, dias) {
+  if (!fechaISO) return "";
+  const [y, m, d] = fechaISO.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d + dias));
+  return dt.toISOString().slice(0, 10);
+}
+
+function sumarMinutosHora(horaStr, mins) {
+  if (!horaStr) return "";
+  const [hh, mm] = horaStr.split(":").map(Number);
+  const total = (hh * 60 + mm + mins) % (24 * 60);
+  const nh = String(Math.floor(total / 60)).padStart(2, "0");
+  const nm = String(total % 60).padStart(2, "0");
+  return `${nh}:${nm}`;
+}
+
+// ---------- generador automático de fixtures con tarjetas desplegables por jornada ----------
+
+function generarRondasRoundRobin(teamIds, idaYVuelta = false) {
+  if (teamIds.length < 2) return [];
+  const lista = [...teamIds];
+  if (lista.length % 2 !== 0) lista.push(null); // null = Fecha Libre (BYE)
+
+  const n = lista.length;
+  const totalRondas = n - 1;
+  const mitad = n / 2;
+  const rotables = lista.slice(1);
+  const rondasIda = [];
+
+  for (let r = 0; r < totalRondas; r++) {
+    const actual = [lista[0], ...rotables];
+    const cruces = [];
+    let libreId = null;
+
+    for (let i = 0; i < mitad; i++) {
+      const a = actual[i];
+      const b = actual[n - 1 - i];
+      if (a === null) libreId = b;
+      else if (b === null) libreId = a;
+      else cruces.push(r % 2 === 0 ? { a, b } : { a: b, b: a });
+    }
+
+    rondasIda.push({ numero: r + 1, cruces, libreId });
+    rotables.unshift(rotables.pop());
+  }
+
+  if (!idaYVuelta) return rondasIda;
+
+  const rondasVuelta = rondasIda.map((r, idx) => ({
+    numero: totalRondas + idx + 1,
+    cruces: r.cruces.map((c) => ({ a: c.b, b: c.a })),
+    libreId: r.libreId,
+  }));
+
+  return [...rondasIda, ...rondasVuelta];
+}
+
+function FixtureGeneratorView({ db, commit, setView, setToast, liga, ligaId }) {
+  const equiposLiga = useMemo(() => teamsOf(db, ligaId), [db, ligaId]);
+
+  const [selectedIds, setSelectedIds] = useState(() => equiposLiga.map((t) => t.id));
+  const [formato, setFormato] = useState("ida"); // "ida" | "ida_vuelta" | "dos_zonas"
+  const [fechaInicio, setFechaInicio] = useState(() => new Date().toISOString().slice(0, 10));
+  const [diasEntreFechas, setDiasEntreFechas] = useState(7);
+  const [horaInicio, setHoraInicio] = useState("10:00");
+  const [intervaloMin, setIntervaloMin] = useState(50);
+  const [canchasSimultaneas, setCanchasSimultaneas] = useState(1);
+  const [sedeDefault, setSedeDefault] = useState("");
+  const [ordenManual, setOrdenManual] = useState(null);
+  const [ediciones, setEdiciones] = useState({});
+  
+  // Estado para controlar qué jornadas están expandidas (por defecto la primera abierta, el resto cerradas)
+  const [jornadasAbiertas, setJornadasAbiertas] = useState({ 1: true });
+
+  useEffect(() => {
+    setSelectedIds(equiposLiga.map((t) => t.id));
+    setOrdenManual(null);
+    setEdiciones({});
+    setJornadasAbiertas({ 1: true });
+  }, [ligaId, equiposLiga]);
+
+  const toggleEquipo = (id) => {
+    setOrdenManual(null);
+    setEdiciones({});
+    setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  };
+
+  const mezclarEquipos = () => {
+    const base = [...selectedIds];
+    for (let i = base.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [base[i], base[j]] = [base[j], base[i]];
+    }
+    setOrdenManual(base);
+    setEdiciones({});
+    setToast("Orden de sorteo mezclado.");
+  };
+
+  const toggleJornada = (nro) => {
+    setJornadasAbiertas((prev) => ({ ...prev, [nro]: !prev[nro] }));
+  };
+
+  const expandirTodas = (abrir) => {
+    const estado = {};
+    rondasCalculadas.forEach((r) => { estado[r.numero] = abrir; });
+    setJornadasAbiertas(estado);
+  };
+
+  const rondasCalculadas = useMemo(() => {
+    const ids = ordenManual ? ordenManual.filter((id) => selectedIds.includes(id)) : selectedIds;
+    if (ids.length < 2) return [];
+
+    let rondasBase = [];
+    if (formato === "dos_zonas" && ids.length >= 4) {
+      const mitad = Math.ceil(ids.length / 2);
+      const zonaA = generarRondasRoundRobin(ids.slice(0, mitad), false);
+      const zonaB = generarRondasRoundRobin(ids.slice(mitad), false);
+      const maxR = Math.max(zonaA.length, zonaB.length);
+      for (let i = 0; i < maxR; i++) {
+        const cA = (zonaA[i]?.cruces || []).map((c) => ({ ...c, zona: "ZONA A" }));
+        const cB = (zonaB[i]?.cruces || []).map((c) => ({ ...c, zona: "ZONA B" }));
+        const libres = [zonaA[i]?.libreId, zonaB[i]?.libreId].filter(Boolean);
+        rondasBase.push({ numero: i + 1, cruces: [...cA, ...cB], libres });
+      }
+    } else {
+      rondasBase = generarRondasRoundRobin(ids, formato === "ida_vuelta").map((r) => ({
+        ...r,
+        libres: r.libreId ? [r.libreId] : [],
+      }));
+    }
+
+    const canchas = Math.max(1, Number(canchasSimultaneas) || 1);
+    const pasoDias = Math.max(0, Number(diasEntreFechas) || 0);
+    const pasoMin = Math.max(0, Number(intervaloMin) || 0);
+
+    return rondasBase.map((r, rIdx) => {
+      const fechaRonda = sumarDiasISO(fechaInicio, rIdx * pasoDias);
+      const partidos = r.cruces.map((c, cIdx) => {
+        const key = `${rIdx}-${cIdx}`;
+        const slotHorario = Math.floor(cIdx / canchas);
+        const canchaNro = (cIdx % canchas) + 1;
+        const horaAuto = horaInicio ? sumarMinutosHora(horaInicio, slotHorario * pasoMin) : "";
+        const sedeAuto = canchas > 1 && sedeDefault.trim()
+          ? `${sedeDefault.trim()} (Cancha ${canchaNro})`
+          : canchas > 1
+            ? `Cancha ${canchaNro}`
+            : sedeDefault.trim();
+
+        const ov = ediciones[key] || {};
+        return {
+          key,
+          equipo_a_id: c.a,
+          equipo_b_id: c.b,
+          zona: c.zona || null,
+          fecha: ov.fecha ?? fechaRonda,
+          hora: ov.hora ?? horaAuto,
+          lugar: ov.lugar ?? sedeAuto,
+        };
+      });
+      return { numero: r.numero, libres: r.libres, partidos, fechaTentativa: sumarDiasISO(fechaInicio, rIdx * pasoDias) };
+    });
+  }, [selectedIds, ordenManual, formato, fechaInicio, diasEntreFechas, horaInicio, intervaloMin, canchasSimultaneas, sedeDefault, ediciones]);
+
+  const totalPartidos = rondasCalculadas.reduce((acc, r) => acc + r.partidos.length, 0);
+
+  const actualizarPartido = (key, campo, valor) => {
+    setEdiciones((prev) => ({
+      ...prev,
+      [key]: { ...(prev[key] || {}), [campo]: valor },
+    }));
+  };
+
+  const publicarFixture = () => {
+    if (totalPartidos === 0) return;
+    const nuevosMatches = rondasCalculadas.flatMap((r) =>
+      r.partidos.map((p) => ({
+        id: uid("m"),
+        liga_id: ligaId,
+        equipo_a_id: p.equipo_a_id,
+        equipo_b_id: p.equipo_b_id,
+        fecha: p.fecha || fechaInicio,
+        hora: p.hora || null,
+        lugar: p.lugar?.trim() || null,
+        estado: "en_curso",
+        resultado_equipo_a: 0,
+        resultado_equipo_b: 0,
+      }))
+    );
+
+    commit((prev) => ({
+      ...prev,
+      matches: [...prev.matches, ...nuevosMatches],
+    }));
+
+    setToast(`${nuevosMatches.length} partidos creados en ${liga.nombre}.`);
+    setView({ name: "matches" });
+  };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+      <BackBar
+        onBack={() => setView({ name: "matches" })}
+        title={`Generador de Fixture · ${liga.nombre}`}
+        right={
+          <span className="font-mono-tech tabular-nums" style={{ padding: "4px 10px", fontSize: 11, fontWeight: 800, background: `${FLUOR}1A`, color: FLUOR, border: `1px solid ${FLUOR}` }}>
+            {selectedIds.length} EQUIPOS · {totalPartidos} PARTIDOS
+          </span>
+        }
+      />
+
+      {equiposLiga.length < 2 ? (
+        <EmptyState
+          text="Necesitás al menos 2 equipos cargados en esta liga para armar un fixture."
+          action={<button type="button" onClick={() => setView({ name: "teams" })} style={{ ...btnPrimary, marginTop: 12 }}>Ir a Equipos</button>}
+        />
+      ) : (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(12, 1fr)", gap: 20, alignItems: "start" }}>
+          {/* Panel de configuración */}
+          <div className="col-span-12 lg:col-span-5" style={{ ...cardStyle, padding: 20, display: "flex", flexDirection: "column", gap: 16 }}>
+            <div style={{ borderBottom: `1px solid ${LINE}`, paddingBottom: 10 }}>
+              <p className="font-mono-tech" style={{ fontSize: 10, color: FLUOR, letterSpacing: "0.1em" }}>[01] PARÁMETROS DEL TORNEO</p>
+              <h2 className="font-display" style={{ fontSize: 18, fontWeight: 900, textTransform: "uppercase", marginTop: 2 }}>
+                CONFIGURACIÓN
+              </h2>
+            </div>
+
+            <div>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                <label style={{ ...labelStyle, marginBottom: 0 }}>Equipos incluidos ({selectedIds.length}/{equiposLiga.length})</label>
+                <button type="button" onClick={mezclarEquipos} className="font-mono-tech" style={{ display: "flex", alignItems: "center", gap: 4, background: "transparent", border: "none", padding: 0, fontSize: 10, fontWeight: 800, color: FLUOR, cursor: "pointer" }}>
+                  <Shuffle size={12} /> SORTEAR ORDEN
+                </button>
+              </div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                {equiposLiga.map((t) => {
+                  const activo = selectedIds.includes(t.id);
+                  return (
+                    <button
+                      key={t.id}
+                      type="button"
+                      onClick={() => toggleEquipo(t.id)}
+                      className="font-mono-tech"
+                      style={{
+                        padding: "6px 10px",
+                        fontSize: 11,
+                        fontWeight: 700,
+                        cursor: "pointer",
+                        border: `1px solid ${activo ? FLUOR : LINE}`,
+                        background: activo ? `${FLUOR}1A` : INK,
+                        color: activo ? FLUOR : MUTED,
+                      }}
+                    >
+                      {activo ? "✓ " : "+ "}{t.nombre}
+                    </button>
+                  );
+                })}
+              </div>
+              {selectedIds.length % 2 !== 0 && selectedIds.length >= 3 && (
+                <p className="font-mono-tech" style={{ marginTop: 6, fontSize: 10, color: GOLD }}>
+                  * Cantidad impar: se asignará 1 fecha libre por jornada automáticamente.
+                </p>
+              )}
+            </div>
+
+            <div>
+              <label style={labelStyle}>Formato de competencia</label>
+              <select value={formato} onChange={(e) => { setFormato(e.target.value); setEdiciones({}); }} style={inputStyle}>
+                <option value="ida">Todos contra todos — Solo ida</option>
+                <option value="ida_vuelta">Todos contra todos — Ida y vuelta</option>
+                <option value="dos_zonas" disabled={selectedIds.length < 4}>2 Zonas (A y B) — Solo ida (mín. 4 equipos)</option>
+              </select>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+              <div>
+                <label style={labelStyle}>Fecha de inicio</label>
+                <input type="date" value={fechaInicio} onChange={(e) => { setFechaInicio(e.target.value); setEdiciones({}); }} style={inputStyle} />
+              </div>
+              <div>
+                <label style={labelStyle}>Días entre fechas</label>
+                <input type="number" min="0" max="60" value={diasEntreFechas} onChange={(e) => { setDiasEntreFechas(e.target.value); setEdiciones({}); }} style={inputStyle} />
+                <span className="font-mono-tech" style={{ fontSize: 10, color: FAINT }}>0 = mismo día / 7 = semanal</span>
+              </div>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
+              <div>
+                <label style={labelStyle}>Hora 1º partido</label>
+                <input type="time" value={horaInicio} onChange={(e) => { setHoraInicio(e.target.value); setEdiciones({}); }} style={inputStyle} />
+              </div>
+              <div>
+                <label style={labelStyle}>Intervalo (min)</label>
+                <input type="number" min="0" max="300" step="5" value={intervaloMin} onChange={(e) => { setIntervaloMin(e.target.value); setEdiciones({}); }} style={inputStyle} />
+              </div>
+              <div>
+                <label style={labelStyle}>Canchas</label>
+                <input type="number" min="1" max="8" value={canchasSimultaneas} onChange={(e) => { setCanchasSimultaneas(e.target.value); setEdiciones({}); }} style={inputStyle} />
+              </div>
+            </div>
+
+            <div>
+              <label style={labelStyle}>Sede por defecto (opcional)</label>
+              <input type="text" value={sedeDefault} onChange={(e) => { setSedeDefault(e.target.value); setEdiciones({}); }} placeholder="Ej: Polideportivo Municipal" style={inputStyle} />
+            </div>
+
+            <button
+              type="button"
+              disabled={totalPartidos === 0}
+              onClick={publicarFixture}
+              style={{ ...btnPrimary, display: "flex", alignItems: "center", justifyContent: "center", gap: 8, width: "100%", padding: "14px 16px", opacity: totalPartidos === 0 ? 0.4 : 1 }}
+            >
+              <Sparkles size={15} /> CREAR {totalPartidos} PARTIDOS EN LA LIGA
+            </button>
+          </div>
+
+          {/* Tarjetas generales y desplegables de jornadas */}
+          <div className="col-span-12 lg:col-span-7" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            <div style={{ ...cardStyle, padding: "14px 18px", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
+              <div>
+                <p className="font-mono-tech" style={{ fontSize: 10, color: MUTED, letterSpacing: "0.1em" }}>[02] VISTA GENERAL DE JORNADAS</p>
+                <h2 className="font-display" style={{ fontSize: 18, fontWeight: 900, textTransform: "uppercase", marginTop: 2 }}>
+                  {rondasCalculadas.length} JORNADAS PLANIFICADAS
+                </h2>
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button type="button" onClick={() => expandirTodas(true)} style={{ ...btnGhost, padding: "6px 10px", fontSize: 10 }}>
+                  EXPANDIR TODAS
+                </button>
+                <button type="button" onClick={() => expandirTodas(false)} style={{ ...btnGhost, padding: "6px 10px", fontSize: 10 }}>
+                  CONTRAER
+                </button>
+              </div>
+            </div>
+
+            {rondasCalculadas.length === 0 ? (
+              <EmptyState text="Seleccioná al menos 2 equipos para previsualizar los cruces." />
+            ) : (
+              rondasCalculadas.map((r) => {
+                const abierta = !!jornadasAbiertas[r.numero];
+                return (
+                  <div key={r.numero} style={{ ...cardStyle, overflow: "hidden" }}>
+                    {/* Tarjeta cabecera (Siempre visible) */}
+                    <div
+                      onClick={() => toggleJornada(r.numero)}
+                      style={{
+                        padding: "14px 18px",
+                        background: abierta ? ELEVATED : INK,
+                        borderBottom: abierta ? `1px solid ${LINE}` : "none",
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        cursor: "pointer",
+                        transition: "background 0.2s",
+                      }}
+                    >
+                      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                        <span className="font-mono-tech" style={{ fontSize: 13, fontWeight: 900, color: FLUOR }}>
+                          FECHA {String(r.numero).padStart(2, "0")}
+                        </span>
+                        <span className="font-mono-tech" style={{ fontSize: 11, color: MUTED }}>
+                          {r.fechaTentativa} · {r.partidos.length} {r.partidos.length === 1 ? "partido" : "partidos"}
+                        </span>
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        {r.libres.length > 0 && (
+                          <span className="font-mono-tech" style={{ fontSize: 10, color: GOLD, background: `${GOLD}1A`, padding: "2px 6px", border: `1px solid ${GOLD}40` }}>
+                            LIBRE: {r.libres.map((id) => teamName(db, id)).join(", ")}
+                          </span>
+                        )}
+                        <span className="font-mono-tech" style={{ fontSize: 11, fontWeight: 800, color: MUTED }}>
+                          {abierta ? "▲ Ocultar" : "▼ Desplegar"}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Contenido desplegable con el detalle de cada cruce */}
+                    {abierta && (
+                      <div>
+                        {r.partidos.map((p, idx) => (
+                          <div
+                            key={p.key}
+                            style={{
+                              padding: "14px 18px",
+                              borderBottom: idx === r.partidos.length - 1 ? "none" : `1px solid ${LINE}`,
+                              display: "flex",
+                              flexDirection: "column",
+                              gap: 10,
+                              background: INK,
+                            }}
+                          >
+                            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                              <span className="font-display" style={{ flex: 1, fontSize: 15, fontWeight: 800, color: COLOR_A.text }}>
+                                {teamName(db, p.equipo_a_id)}
+                              </span>
+                              <span className="font-mono-tech" style={{ fontSize: 11, fontWeight: 800, color: MUTED, padding: "2px 8px", border: `1px solid ${LINE}`, background: ELEVATED }}>
+                                {p.zona ? `${p.zona} · VS` : "VS"}
+                              </span>
+                              <span className="font-display" style={{ flex: 1, textAlign: "right", fontSize: 15, fontWeight: 800, color: COLOR_B.text }}>
+                                {teamName(db, p.equipo_b_id)}
+                              </span>
+                            </div>
+                            
+                            {/* Inputs editables para fecha, hora y sede del cruce */}
+                            <div style={{ display: "grid", gridTemplateColumns: "135px 100px 1fr", gap: 8 }}>
+                              <div>
+                                <label style={{ ...labelStyle, fontSize: 9, marginBottom: 2 }}>Fecha</label>
+                                <input
+                                  type="date"
+                                  value={p.fecha}
+                                  onChange={(e) => actualizarPartido(p.key, "fecha", e.target.value)}
+                                  style={{ ...inputStyle, padding: "6px 8px", fontSize: 12 }}
+                                />
+                              </div>
+                              <div>
+                                <label style={{ ...labelStyle, fontSize: 9, marginBottom: 2 }}>Hora</label>
+                                <input
+                                  type="time"
+                                  value={p.hora}
+                                  onChange={(e) => actualizarPartido(p.key, "hora", e.target.value)}
+                                  style={{ ...inputStyle, padding: "6px 8px", fontSize: 12 }}
+                                />
+                              </div>
+                              <div>
+                                <label style={{ ...labelStyle, fontSize: 9, marginBottom: 2 }}>Sede / Cancha</label>
+                                <input
+                                  type="text"
+                                  value={p.lugar}
+                                  placeholder="Sede"
+                                  onChange={(e) => actualizarPartido(p.key, "lugar", e.target.value)}
+                                  style={{ ...inputStyle, padding: "6px 8px", fontSize: 12 }}
+                                />
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+// ---------- tabla de posiciones automática para cualquier liga ----------
+
+function StandingsView({ db, setView, ligaId, liga }) {
+  const equipos = useMemo(() => teamsOf(db, ligaId), [db, ligaId]);
+  const partidosLiga = useMemo(() => matchesOf(db, ligaId), [db, ligaId]);
+
+  const tabla = useMemo(() => {
+    const map = new Map();
+    equipos.forEach((t) => {
+      map.set(t.id, {
+        equipoId: t.id,
+        nombre: t.nombre,
+        pj: 0,
+        pg: 0,
+        pe: 0,
+        pp: 0,
+        gf: 0,
+        gc: 0,
+        dif: 0,
+        pts: 0,
+      });
+    });
+
+    for (const m of partidosLiga) {
+      if (m.estado !== "finalizado") continue;
+      const gA = matchScore(db, m.id, m.equipo_a_id);
+      const gB = matchScore(db, m.id, m.equipo_b_id);
+
+      const regA = map.get(m.equipo_a_id);
+      const regB = map.get(m.equipo_b_id);
+
+      if (regA) {
+        regA.pj += 1;
+        regA.gf += gA;
+        regA.gc += gB;
+      }
+      if (regB) {
+        regB.pj += 1;
+        regB.gf += gB;
+        regB.gc += gA;
+      }
+
+      if (!regA || !regB) continue;
+
+      if (gA > gB) {
+        regA.pg += 1;
+        regA.pts += 3;
+        regB.pp += 1;
+      } else if (gB > gA) {
+        regB.pg += 1;
+        regB.pts += 3;
+        regA.pp += 1;
+      } else {
+        regA.pe += 1;
+        regA.pts += 1;
+        regB.pe += 1;
+        regB.pts += 1;
+      }
+    }
+
+    const rows = Array.from(map.values()).map((r) => ({
+      ...r,
+      dif: r.gf - r.gc,
+    }));
+
+    rows.sort((a, b) => {
+      if (b.pts !== a.pts) return b.pts - a.pts;
+      if (b.dif !== a.dif) return b.dif - a.dif;
+      if (b.gf !== a.gf) return b.gf - a.gf;
+      return collator.compare(a.nombre, b.nombre);
+    });
+
+    return rows;
+  }, [equipos, partidosLiga, db]);
+
+  const partidosFinalizados = partidosLiga.filter((m) => m.estado === "finalizado").length;
+
+  return (
+    <div>
+      <BackBar
+        onBack={() => setView({ name: "home" })}
+        title={`Posiciones · ${liga.nombre}`}
+        right={
+          <span className="font-mono-tech tabular-nums" style={{ padding: "4px 10px", fontSize: 11, fontWeight: 800, background: `${FLUOR}1A`, color: FLUOR, border: `1px solid ${FLUOR}` }}>
+            {partidosFinalizados} PARTIDOS OFICIALES
+          </span>
+        }
+      />
+
+      <p style={{ marginBottom: 16, fontSize: 14, color: MUTED }}>
+        Tabla calculada automáticamente en base a los partidos finalizados de la liga (3 puntos por victoria, 1 por empate).
+      </p>
+
+      {equipos.length === 0 ? (
+        <EmptyState text="Esta liga no tiene equipos cargados." />
+      ) : tabla.length === 0 ? (
+        <EmptyState text="No hay equipos en la tabla." />
+      ) : (
+        <div style={{ ...cardStyle, overflowX: "auto" }}>
+          <table style={{ width: "100%", minWidth: 640, fontSize: 13, borderCollapse: "collapse" }}>
+            <thead>
+              <tr className="font-mono-tech" style={{ borderBottom: `1px solid ${LINE}`, textAlign: "left", fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", color: MUTED }}>
+                <th style={{ padding: "12px 16px", width: 50, textAlign: "center" }}>#</th>
+                <th style={{ padding: "12px 16px" }}>Equipo</th>
+                <th style={{ padding: 10, textAlign: "center" }}>PJ</th>
+                <th style={{ padding: 10, textAlign: "center" }}>PG</th>
+                <th style={{ padding: 10, textAlign: "center" }}>PE</th>
+                <th style={{ padding: 10, textAlign: "center" }}>PP</th>
+                <th style={{ padding: 10, textAlign: "center" }}>GF</th>
+                <th style={{ padding: 10, textAlign: "center" }}>GC</th>
+                <th style={{ padding: 10, textAlign: "center" }}>DIF</th>
+                <th style={{ padding: 10, textAlign: "center", color: FLUOR }}>PTS</th>
+              </tr>
+            </thead>
+            <tbody>
+              {tabla.map((r, i) => (
+                <tr
+                  key={r.equipoId}
+                  style={{
+                    borderBottom: i === tabla.length - 1 ? "none" : `1px solid ${LINE}`,
+                    background: i === 0 ? `${FLUOR}0A` : "transparent",
+                  }}
+                >
+                  <td className="font-mono-tech tabular-nums" style={{ padding: "12px 16px", textAlign: "center", fontWeight: 800, color: i === 0 ? FLUOR : MUTED }}>
+                    {i + 1}
+                  </td>
+                  <td style={{ padding: "12px 16px", fontWeight: 800, color: TEXT }}>
+                    {r.nombre}
+                  </td>
+                  <td className="font-mono-tech tabular-nums" style={{ padding: 10, textAlign: "center" }}>{r.pj}</td>
+                  <td className="font-mono-tech tabular-nums" style={{ padding: 10, textAlign: "center" }}>{r.pg}</td>
+                  <td className="font-mono-tech tabular-nums" style={{ padding: 10, textAlign: "center" }}>{r.pe}</td>
+                  <td className="font-mono-tech tabular-nums" style={{ padding: 10, textAlign: "center" }}>{r.pp}</td>
+                  <td className="font-mono-tech tabular-nums" style={{ padding: 10, textAlign: "center" }}>{r.gf}</td>
+                  <td className="font-mono-tech tabular-nums" style={{ padding: 10, textAlign: "center" }}>{r.gc}</td>
+                  <td className="font-mono-tech tabular-nums" style={{ padding: 10, textAlign: "center", color: r.dif > 0 ? FLUOR : r.dif < 0 ? RED : MUTED }}>
+                    {r.dif > 0 ? `+${r.dif}` : r.dif}
+                  </td>
+                  <td className="font-mono-tech tabular-nums" style={{ padding: 10, textAlign: "center", fontWeight: 900, fontSize: 15, color: FLUOR }}>
+                    {r.pts}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <p className="font-mono-tech" style={{ marginTop: 10, fontSize: 11, color: FAINT }}>
+        [CRITERIO] 3 PTS POR VICTORIA · 1 PT POR EMPATE · DESEMPATE POR DIFERENCIA DE GOLES Y GOLES A FAVOR.
+      </p>
+    </div>
+  );
+}
+
