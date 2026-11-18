@@ -41,9 +41,17 @@ export async function saveDiff(prev, next) {
 
   for (const t of TABLES) {
     const old = new Map((before[t] || []).map((r) => [r.id, pick(r, COLUMNS[t])]));
-    const changed = (next[t] || []).map((r) => pick(r, COLUMNS[t])).filter((r) => !same(r, old.get(r.id)));
+    let changed = (next[t] || []).map((r) => pick(r, COLUMNS[t])).filter((r) => !same(r, old.get(r.id)));
+
+    if (t === "stats" && changed.length > 0) {
+      const dedup = new Map();
+      for (const r of changed) dedup.set(`${r.partido_id}:${r.jugador_id}`, r);
+      changed = Array.from(dedup.values());
+    }
+
+    const upsertOpts = t === "stats" ? { onConflict: "partido_id,jugador_id" } : undefined;
     for (let i = 0; i < changed.length; i += 500) {
-      const { error } = await supabase.from(t).upsert(changed.slice(i, i + 500));
+      const { error } = await supabase.from(t).upsert(changed.slice(i, i + 500), upsertOpts);
       if (error) throw error;
     }
   }
