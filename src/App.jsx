@@ -33,9 +33,18 @@ import {
   Download,
   Sparkles,
   Shuffle,
+  GitBranch,
+  Play,
+  Pause,
+  Clock,
+  Activity,
+  Terminal,
+  ChevronRight,
+  Radio,
 } from "lucide-react";
 import { supabase } from "./lib/supabase";
 import { loadDb, saveDiff } from "./lib/syncDb";
+import TournamentView from "./components/TournamentView";
 
 const ADMIN_EMAIL = "toblanqui@outlook.com";
 const isSuperAdmin = (email) => (email || "").trim().toLowerCase() === ADMIN_EMAIL;
@@ -377,6 +386,25 @@ export default function App({ canEdit = false, userEmail = null, userId = null, 
   const isLigaOrganizer =
     isAdmin ||
     (canEdit && Boolean(liga?.organizador_id ? liga.organizador_id === userId : userRol === "organizador"));
+  
+  const handleGenerateCupMatches = (cruces) => {
+    if (!isLigaOrganizer) return;
+    const nuevos = cruces.map((c) => ({
+      id: uid("m"),
+      liga_id: liga.id,
+      equipo_a_id: c.equipo_a_id,
+      equipo_b_id: c.equipo_b_id,
+      fecha: c.fecha || new Date().toISOString().slice(0, 10),
+      hora: c.hora || null,
+      lugar: c.lugar || null,
+      fase: c.fase || "copa",
+      estado: "en_curso",
+      resultado_equipo_a: 0,
+      resultado_equipo_b: 0,
+    }));
+    commit((prev) => ({ ...prev, matches: [...prev.matches, ...nuevos] }));
+    setToast(`${nuevos.length} partido(s) de Copa generados.`);
+  };
 
   const ctx = { db, commit, setView, setToast, liga, ligaId: liga.id, canEdit, isAdmin, isLigaOrganizer, userEmail, userId };
 
@@ -397,7 +425,7 @@ export default function App({ canEdit = false, userEmail = null, userId = null, 
         onLogout={onLogout}
       />
       <main style={{ maxWidth: 1160, margin: "0 auto", padding: "20px 16px 72px" }}>
-        {view.name === "home" && <HomeView {...ctx} />}
+        {view.name === "home" && (<HomeView{...ctx} user={ctx.canEdit} onOpenLogin={() => setLoginOpen(true)} onOpenAdmin={() => setView({ name: "admin" })} />)}
         {view.name === "new" && (canEdit ? <NewMatchView {...ctx} /> : <HomeView {...ctx} />)}
         {view.name === "matches" && <MatchesView {...ctx} />}
         {view.name === "match" && <MatchView {...ctx} matchId={view.matchId} />}
@@ -407,6 +435,7 @@ export default function App({ canEdit = false, userEmail = null, userId = null, 
         {view.name === "leagues" && <LeaguesView {...ctx} setLigaId={setLigaId} />}
         {view.name === "users" && (isAdmin ? <UsersAdminView {...ctx} /> : <HomeView {...ctx} />)}
         {view.name === "fixture" && (isLigaOrganizer ? <FixtureGeneratorView {...ctx} /> : <HomeView {...ctx} />)}
+        {view.name === "tournament" && (<TournamentView liga={liga} teams={teamsOf(db, ligaId)} matches={matchesOf(db, ligaId)} getScore={(matchId, teamId) => matchScore(db, matchId, teamId)} canEdit={canEdit} onOpenMatch={(matchId) => setView({ name: "match", id: matchId })} />)}
       </main>
 
       {saveState === "error" && (
@@ -441,6 +470,7 @@ function TopNav({ view, setView, saveState, db, liga, setLigaId, canEdit, isAdmi
     { name: "teams", label: "Equipos", icon: Users },
     { name: "stats", label: "Estadísticas", icon: BarChart3 },
     { name: "standings", label: "Posiciones", icon: Trophy },
+    { name: "tournament", label: "Copa", icon: GitBranch },
     { name: "leagues", label: "Ligas", icon: Shield },
     { name: "users", label: "Usuarios", icon: KeyRound },
   ];
@@ -460,6 +490,7 @@ function TopNav({ view, setView, saveState, db, liga, setLigaId, canEdit, isAdmi
     leagues: "LIGAS",
     users: "USUARIOS",
     fixture: "FIXTURE",
+    tournament: "COPA",
   };
   const pageTitle = titles[view.name] || "ESTADISTIK";
 
@@ -489,7 +520,7 @@ function TopNav({ view, setView, saveState, db, liga, setLigaId, canEdit, isAdmi
     const prev = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     const onKey = (e) => { if (e.key === "Escape") setMenuOpen(false); };
-    const onResize = () => { if (window.innerWidth >= 768) setMenuOpen(false); };
+    const onResize = () => { if (window.innerWidth >= 1160) setMenuOpen(false); };
     window.addEventListener("keydown", onKey);
     window.addEventListener("resize", onResize);
     return () => {
@@ -927,7 +958,7 @@ const cambiarRolUsuario = async (targetUserId, nuevoRol) => {
         }
       />
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(12, 1fr)", gap: 20, alignItems: "start" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(12, minmax(0, 1fr))", gap: 20, alignItems: "start" }}>
         <form onSubmit={crearUsuario} className="col-span-12 lg:col-span-5" style={{ ...cardStyle, padding: 20, display: "flex", flexDirection: "column", gap: 14 }}>
           <div style={{ borderBottom: `1px solid ${LINE}`, paddingBottom: 10 }}>
             <p className="font-mono-tech" style={{ fontSize: 10, color: FLUOR, letterSpacing: "0.1em" }}>[01] ALTA DE CUENTA</p>
@@ -1397,106 +1428,331 @@ function LeaguesView({ db, commit, setView, setLigaId, ligaId, setToast, isAdmin
 
 // ---------- home (Bento Grid Suizo) ----------
 
-function HomeView({ db, setView, liga, ligaId, canEdit, isAdmin, isLigaOrganizer }) {
-  const partidos = matchesOf(db, ligaId);
-  const enCurso = partidos.filter((m) => m.estado === "en_curso");
-  const finalizados = partidos.filter((m) => m.estado === "finalizado");
-  const recientes = [...partidos].sort((a, b) => (b.fecha + (b.hora || "")).localeCompare(a.fecha + (a.hora || ""))).slice(0, 4);
-  const equipos = teamsOf(db, ligaId);
-  const gestionaLiga = Boolean(isAdmin || isLigaOrganizer);
+function FlipLink({ num, label, count, onClick }) {
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={onClick}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onClick();
+        }
+      }}
+      className="flip-link-row"
+    >
+      <div style={{ display: "flex", alignItems: "baseline", gap: 12, minWidth: 0 }}>
+        <span className="font-mono-tech tabular-nums" style={{ fontSize: 11, fontWeight: 700, color: "#CCFF00", flexShrink: 0 }}>
+          [{num}]
+        </span>
+        <span className="flip-link-stack font-display" style={{ fontSize: "clamp(2rem, 6vw, 4.2rem)", fontWeight: 900, letterSpacing: "-0.03em", textTransform: "uppercase", color: TEXT }}>
+          <span className="flip-link-front">{label}</span>
+          <span className="flip-link-back" aria-hidden="true">{label}</span>
+        </span>
+      </div>
+
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+        {count !== undefined && (
+          <span className="font-mono-tech tabular-nums" style={{ border: `1px solid ${LINE}`, background: INK, padding: "3px 8px", fontSize: 11, fontWeight: 700, color: MUTED }}>
+            {String(count).padStart(2, "0")}
+          </span>
+        )}
+        <ChevronRight size={20} color="#CCFF00" />
+      </div>
+    </div>
+  );
+}
+
+function HomeView({ db, setView, ligaId, liga, user, canEdit, onOpenLogin, onOpenAdmin }) {
+  const partidosLiga = useMemo(() => matchesOf(db, ligaId), [db, ligaId]);
+  const equiposLiga = useMemo(() => teamsOf(db, ligaId), [db, ligaId]);
+
+  const partidoEnVivo = useMemo(
+    () => partidosLiga.find((m) => m.estado === "en_curso") || null,
+    [partidosLiga]
+  );
+
+  const proximoPartido = useMemo(() => {
+    if (partidoEnVivo) return null;
+    const pendientes = partidosLiga
+      .filter((m) => m.estado === "pendiente")
+      .sort((a, b) => `${a.fecha || ""}${a.hora || ""}`.localeCompare(`${b.fecha || ""}${b.hora || ""}`));
+    return pendientes[0] || null;
+  }, [partidosLiga, partidoEnVivo]);
+
+  const [relojVivo, setRelojVivo] = useState(() => calcularSegundosActuales(partidoEnVivo));
+  const [ultimaAccionTexto, setUltimaAccionTexto] = useState("");
+  const [tapCount, setTapCount] = useState(0);
+
+  // Tick local del cronómetro neto del partido en curso
+  useEffect(() => {
+    setRelojVivo(calcularSegundosActuales(partidoEnVivo));
+    if (!partidoEnVivo?.reloj_corriendo) return;
+    const id = setInterval(() => {
+      setRelojVivo(calcularSegundosActuales(partidoEnVivo));
+    }, 1000);
+    return () => clearInterval(id);
+  }, [
+    partidoEnVivo?.id,
+    partidoEnVivo?.reloj_corriendo,
+    partidoEnVivo?.reloj_segundos,
+    partidoEnVivo?.reloj_actualizado_en,
+  ]);
+
+  // Traer la última incidencia de Supabase para la marquesina en vivo (auto-refresh cada 30s)
+  useEffect(() => {
+    if (!partidoEnVivo?.id) {
+      setUltimaAccionTexto("");
+      return;
+    }
+    let cancelado = false;
+    const fetchUltima = async () => {
+      const { data } = await supabase
+        .from("match_events")
+        .select("detalle, segundo_neto")
+        .eq("partido_id", partidoEnVivo.id)
+        .order("segundo_neto", { ascending: false })
+        .order("creado_en", { ascending: false })
+        .limit(1);
+      if (!cancelado && data && data.length > 0) {
+        const ev = data[0];
+        setUltimaAccionTexto(`[${fmtRelojNeto(ev.segundo_neto)}] ${ev.detalle.toUpperCase()}`);
+      } else if (!cancelado) {
+        setUltimaAccionTexto(
+          `PARTIDO EN CURSO · INICIO REAL ${partidoEnVivo.hora_inicio_real || "--:--"} HS · SEGUÍ EL MINUTO A MINUTO`
+        );
+      }
+    };
+    fetchUltima();
+    const poll = setInterval(fetchUltima, 30000);
+    return () => {
+      cancelado = true;
+      clearInterval(poll);
+    };
+  }, [partidoEnVivo?.id, partidoEnVivo?.hora_inicio_real]);
+
+  const scoreVivoA = partidoEnVivo ? matchScore(db, partidoEnVivo.id, partidoEnVivo.equipo_a_id) : 0;
+  const scoreVivoB = partidoEnVivo ? matchScore(db, partidoEnVivo.id, partidoEnVivo.equipo_b_id) : 0;
+
+  const handleSecretAccess = () => {
+    const next = tapCount + 1;
+    if (next >= 2) {
+      setTapCount(0);
+      if (canEdit && onOpenAdmin) {
+        onOpenAdmin();
+      } else if (onOpenLogin) {
+        onOpenLogin();
+      }
+    } else {
+      setTapCount(next);
+      setTimeout(() => setTapCount(0), 1400);
+    }
+  };
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-      <section style={{ display: "grid", gridTemplateColumns: "repeat(12, 1fr)", gap: 1, background: LINE, border: `1px solid ${LINE}` }}>
-        <div className="col-span-12 lg:col-span-8" style={{ background: SURFACE, padding: 24, display: "flex", flexDirection: "column", justifyContent: "space-between" }}>
-          <div>
-            <p className="font-mono-tech" style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.12em", color: FLUOR }}>
-              01 // {liga.nombre}
-            </p>
-            <h1 className="font-display" style={{ marginTop: 8, fontSize: 34, fontWeight: 900, lineHeight: 1.05, letterSpacing: "-0.03em", textTransform: "uppercase" }}>
-              TELEMETRÍA DE PARTIDO EN TIEMPO REAL.
-            </h1>
-            <p style={{ marginTop: 10, maxWidth: 540, fontSize: 14, color: MUTED }}>
-              {canEdit
-                ? "Registrá puntos, tiros, asistencias, rebotes, robos, pérdidas y rotaciones de zona por jugador en vivo."
-                : "Consultá marcadores en curso, resultados oficiales y planillas acumuladas de la liga."}
-            </p>
-          </div>
-          <div style={{ marginTop: 22, display: "flex", flexWrap: "wrap", gap: 10 }}>
-            {canEdit && (
-              <button type="button" onClick={() => setView({ name: "new" })} style={{ ...btnPrimary, display: "flex", alignItems: "center", gap: 8, padding: "12px 18px" }}>
-                <Plus size={16} /> CREAR PARTIDO
-              </button>
-            )}
-            <button type="button" onClick={() => setView({ name: "matches" })} style={{ ...btnGhost, display: "flex", alignItems: "center", gap: 8, padding: "12px 18px" }}>
-              <ListChecks size={16} /> VER PARTIDOS
-            </button>
-            <button type="button" onClick={() => setView({ name: "stats" })} style={{ ...btnGhost, display: "flex", alignItems: "center", gap: 8, padding: "12px 18px" }}>
-              <BarChart3 size={16} /> TABLA GENERAL
-            </button>
-          </div>
+      {/* CABECERA BRUTALISTA DE LIGA */}
+      <div style={{ borderBottom: `1px solid ${LINE}`, paddingBottom: 14, display: "flex", justifyContent: "space-between", alignItems: "flex-end", flexWrap: "wrap", gap: 10 }}>
+        <div>
+          <p className="font-mono-tech" style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.14em", color: FLUOR }}>
+            ESTADISTIK // TELEMETRÍA OFICIAL
+          </p>
+          <h1 className="font-display" style={{ fontSize: "clamp(1.6rem, 4vw, 2.4rem)", fontWeight: 900, textTransform: "uppercase", lineHeight: 1.05, marginTop: 4 }}>
+            {liga?.nombre || "TORNEO KORFBALL"}
+          </h1>
         </div>
+        <span className="font-mono-tech tabular-nums" style={{ fontSize: 11, color: MUTED, border: `1px solid ${LINE}`, background: SURFACE, padding: "5px 10px" }}>
+          {equiposLiga.length} EQUIPOS · {partidosLiga.length} PARTIDOS
+        </span>
+      </div>
 
-        <div className="col-span-12 lg:col-span-4" style={{ background: CLUB, color: "white", padding: 24, display: "flex", flexDirection: "column", justifyContent: "space-between" }}>
-          <div style={{ borderBottom: "1px solid rgba(255,255,255,0.2)", paddingBottom: 12 }}>
-            <span className="font-mono-tech" style={{ fontSize: 11, letterSpacing: "0.12em", opacity: 0.8 }}>02 // RESUMEN LIGA</span>
-            <h2 className="font-display" style={{ fontSize: 18, fontWeight: 800, marginTop: 2 }}>ESTADO DE COMPETENCIA</h2>
+      {/* HERO CARD: PULSO FLÚOR (EN VIVO O PRÓXIMO PARTIDO) */}
+      {partidoEnVivo ? (
+        <div
+          role="button"
+          tabIndex={0}
+          onClick={() => setView({ name: "match", matchId: partidoEnVivo.id })}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              setView({ name: "match", matchId: partidoEnVivo.id });
+            }
+          }}
+          style={{
+            border: `1px solid ${FLUOR}`,
+            background: SURFACE,
+            cursor: "pointer",
+            overflow: "hidden",
+          }}
+        >
+          {/* Barra superior de estado en vivo */}
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 16px", background: `${FLUOR}18`, borderBottom: `1px solid ${FLUOR}40` }}>
+            <span className="font-mono-tech" style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11, fontWeight: 900, color: FLUOR, letterSpacing: "0.08em" }}>
+              <span style={{ display: "inline-block", width: 8, height: 8, background: FLUOR, boxShadow: `0 0 8px ${FLUOR}` }} />
+              EN VIVO · RELOJ NETO {fmtRelojNeto(relojVivo)}
+            </span>
+            <span className="font-mono-tech" style={{ fontSize: 11, fontWeight: 800, color: FLUOR }}>
+              ABRIR PLANILLA →
+            </span>
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, margin: "18px 0" }}>
-            <div>
-              <span className="font-mono-tech" style={{ fontSize: 10, opacity: 0.75 }}>PARTIDOS</span>
-              <p className="font-display tabular-nums" style={{ fontSize: 40, fontWeight: 900, lineHeight: 1 }}>{partidos.length}</p>
+
+          {/* Marcador central */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr", alignItems: "center", gap: 12, padding: "18px 16px" }}>
+            <div style={{ minWidth: 0 }}>
+              <span className="font-mono-tech" style={{ fontSize: 10, color: MUTED }}>LOCAL</span>
+              <p className="font-display" style={{ fontSize: "clamp(1.15rem, 3vw, 1.7rem)", fontWeight: 900, textTransform: "uppercase", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: COLOR_A.text }}>
+                {teamName(db, partidoEnVivo.equipo_a_id)}
+              </p>
             </div>
-            <div>
-              <span className="font-mono-tech" style={{ fontSize: 10, opacity: 0.75 }}>CLUBES</span>
-              <p className="font-display tabular-nums" style={{ fontSize: 40, fontWeight: 900, lineHeight: 1 }}>{equipos.length}</p>
+
+            <div className="font-mono-tech tabular-nums" style={{ display: "flex", alignItems: "center", gap: 12, border: `1px solid ${LINE}`, background: INK, padding: "8px 16px" }}>
+              <span style={{ fontSize: "clamp(1.8rem, 4.5vw, 2.6rem)", fontWeight: 900, color: "white", lineHeight: 1 }}>{scoreVivoA}</span>
+              <span style={{ fontSize: 16, fontWeight: 700, color: FAINT }}>:</span>
+              <span style={{ fontSize: "clamp(1.8rem, 4.5vw, 2.6rem)", fontWeight: 900, color: "white", lineHeight: 1 }}>{scoreVivoB}</span>
+            </div>
+
+            <div style={{ minWidth: 0, textAlign: "right" }}>
+              <span className="font-mono-tech" style={{ fontSize: 10, color: MUTED }}>VISITANTE</span>
+              <p className="font-display" style={{ fontSize: "clamp(1.15rem, 3vw, 1.7rem)", fontWeight: 900, textTransform: "uppercase", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: COLOR_B.text }}>
+                {teamName(db, partidoEnVivo.equipo_b_id)}
+              </p>
             </div>
           </div>
-          <div className="font-mono-tech tabular-nums" style={{ borderTop: "1px solid rgba(255,255,255,0.2)", paddingTop: 12, fontSize: 12, display: "flex", justifyContent: "space-between" }}>
-            <span>EN VIVO: <strong style={{ color: FLUOR }}>{enCurso.length}</strong></span>
-            <span>FINALIZADOS: <strong>{finalizados.length}</strong></span>
+
+          {/* Marquesina continua de última acción detallada (derecha -> izquierda) */}
+          <div
+            className="estadistik-marquee-wrap"
+            style={{
+              borderTop: `1px solid ${LINE}`,
+              background: INK,
+              padding: "8px 0",
+              overflow: "hidden",
+              display: "flex",
+              alignItems: "center",
+            }}
+          >
+            <span
+              className="font-mono-tech"
+              style={{
+                flexShrink: 0,
+                background: FLUOR,
+                color: INK,
+                fontSize: 10,
+                fontWeight: 900,
+                padding: "2px 8px",
+                marginLeft: 12,
+                marginRight: 10,
+                letterSpacing: "0.06em",
+              }}
+            >
+              ÚLTIMA ACCIÓN
+            </span>
+            <div style={{ overflow: "hidden", flex: 1 }}>
+              <div className="estadistik-marquee-track font-mono-tech" style={{ fontSize: 11, fontWeight: 700, color: TEXT }}>
+                <span style={{ paddingRight: 48 }}>
+                  {ultimaAccionTexto || "SIN INCIDENCIAS REGISTRADAS TODAVÍA"} &nbsp;///&nbsp;
+                </span>
+                <span style={{ paddingRight: 48 }} aria-hidden="true">
+                  {ultimaAccionTexto || "SIN INCIDENCIAS REGISTRADAS TODAVÍA"} &nbsp;///&nbsp;
+                </span>
+              </div>
+            </div>
           </div>
         </div>
-      </section>
-
-      {enCurso.length > 0 && (
-        <section>
-          <h2 className="font-mono-tech" style={{ marginBottom: 8, fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.12em", color: FLUOR }}>
-            ● EN CURSO AHORA
-          </h2>
-          <div className="grid gap-3 sm:grid-cols-2">
-            {enCurso.map((m) => <MatchCard key={m.id} db={db} match={m} onClick={() => setView({ name: "match", matchId: m.id })} />)}
+      ) : proximoPartido ? (
+        <div
+          role="button"
+          tabIndex={0}
+          onClick={() => setView({ name: "match", matchId: proximoPartido.id })}
+          style={{ border: `1px solid ${LINE}`, background: SURFACE, padding: "14px 16px", cursor: "pointer" }}
+        >
+          <div className="font-mono-tech" style={{ display: "flex", justifyContent: "space-between", fontSize: 10, fontWeight: 800, color: GOLD, marginBottom: 8 }}>
+            <span>PRÓXIMO ENCUENTRO PROGRAMADO</span>
+            <span>{fmtFecha(proximoPartido.fecha)} {proximoPartido.hora ? `· ${proximoPartido.hora} HS` : ""}</span>
           </div>
-        </section>
-      )}
-
-      <section>
-        <div style={{ marginBottom: 8, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <h2 className="font-mono-tech" style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.12em", color: MUTED }}>03 // ÚLTIMOS PARTIDOS</h2>
-          <button type="button" onClick={() => setView({ name: "matches" })} className="font-mono-tech" style={{ fontSize: 11, fontWeight: 700, color: FLUOR, background: "transparent", border: "none", cursor: "pointer" }}>VER TODOS →</button>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+            <span className="font-display" style={{ fontSize: 18, fontWeight: 900, textTransform: "uppercase", color: COLOR_A.text }}>
+              {teamName(db, proximoPartido.equipo_a_id)}
+            </span>
+            <span className="font-mono-tech" style={{ fontSize: 11, fontWeight: 800, color: MUTED, padding: "2px 8px", border: `1px solid ${LINE}`, background: INK }}>
+              VS
+            </span>
+            <span className="font-display" style={{ fontSize: 18, fontWeight: 900, textTransform: "uppercase", color: COLOR_B.text }}>
+              {teamName(db, proximoPartido.equipo_b_id)}
+            </span>
+          </div>
         </div>
-        {recientes.length === 0
-          ? <EmptyState text="Todavía no se registraron partidos en esta liga." />
-          : <div className="grid gap-3 sm:grid-cols-2">{recientes.map((m) => <MatchCard key={m.id} db={db} match={m} onClick={() => setView({ name: "match", matchId: m.id })} />)}</div>}
-      </section>
+      ) : null}
 
-      <section>
-        <h2 className="font-mono-tech" style={{ marginBottom: 8, fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.12em", color: MUTED }}>04 // EQUIPOS DE LA LIGA</h2>
-        {equipos.length === 0 ? (
-          <EmptyState text="Esta liga no tiene equipos todavía."
-            action={gestionaLiga ? <button type="button" onClick={() => setView({ name: "teams" })} style={{ ...btnPrimary, marginTop: 12 }}>Agregar equipos</button> : null} />
-        ) : (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 1, background: LINE, border: `1px solid ${LINE}` }}>
-            {equipos.map((t) => (
-              <button type="button" key={t.id} onClick={() => setView({ name: "teams", teamId: t.id })}
-                className="font-display"
-                style={{ background: SURFACE, color: TEXT, padding: "14px 16px", fontSize: 15, fontWeight: 800, textAlign: "left", border: "none", cursor: "pointer" }}>
-                {t.nombre}
-              </button>
-            ))}
-          </div>
-        )}
-      </section>
+      {/* MENÚ DE ACCESOS CINÉTICOS FLIPLINK */}
+      <nav aria-label="Navegación principal" style={{ borderTop: `1px solid ${LINE}` }}>
+        <FlipLink
+          num="01"
+          label="PARTIDOS"
+          count={partidosLiga.length}
+          onClick={() => setView({ name: "matches" })}
+        />
+        <FlipLink
+          num="02"
+          label="ESTADISTICAS"
+          onClick={() => setView({ name: "stats" })}
+        />
+        <FlipLink
+          num="03"
+          label="POSICIONES"
+          onClick={() => setView({ name: "standings" })}
+        />
+        <FlipLink
+          num="04"
+          label="EQUIPOS"
+          count={equiposLiga.length}
+          onClick={() => setView({ name: "teams" })}
+        />
+      </nav>
+
+      {/* PIE DE PÁGINA CON ACCESO CAMUFLADO PARA ORGANIZADORES / PLANILLEROS */}
+      <footer style={{ marginTop: 12, paddingTop: 12, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+        <button
+          type="button"
+          onClick={handleSecretAccess}
+          title="Mesa de control"
+          className="font-mono-tech"
+          style={{
+            background: "transparent",
+            border: "none",
+            padding: 0,
+            fontSize: 10,
+            color: tapCount > 0 ? FLUOR : FAINT,
+            cursor: "pointer",
+            letterSpacing: "0.08em",
+          }}
+        >
+          {tapCount > 0 ? "[TOQUE DE NUEVO PARA ACCESO CONTROL]" : "v2.6 // ESTADISTIK_SYS"}
+        </button>
+
+        <button
+          type="button"
+          onClick={() => (canEdit && onOpenAdmin ? onOpenAdmin() : onOpenLogin?.())}
+          aria-label="Acceso mesa de control"
+          title={user ? "Panel de control" : "Acceso planilleros"}
+          className="font-mono-tech"
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 5,
+            background: "transparent",
+            border: `1px solid ${user ? `${FLUOR}55` : "transparent"}`,
+            padding: "4px 8px",
+            fontSize: 10,
+            color: user ? FLUOR : FAINT,
+            cursor: "pointer",
+          }}
+        >
+          <Terminal size={12} />
+          <span>{user ? "CTRL_ACTIVO" : ">_"}</span>
+        </button>
+      </footer>
     </div>
   );
 }
@@ -1504,13 +1760,15 @@ function HomeView({ db, setView, liga, ligaId, canEdit, isAdmin, isLigaOrganizer
 function MatchCard({ db, match, onClick, onEdit, onDelete }) {
   const scoreA = matchScore(db, match.id, match.equipo_a_id);
   const scoreB = matchScore(db, match.id, match.equipo_b_id);
+  const pendiente = match.estado === "pendiente";
   const finalized = match.estado === "finalizado";
+
   return (
     <div style={{ ...cardStyle, padding: 16 }}>
       <div className="font-mono-tech" style={{ marginBottom: 10, display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: 11, color: MUTED }}>
         <span style={{ display: "flex", alignItems: "center", gap: 5 }}><Calendar size={12} /> {fmtFecha(match.fecha)} {match.hora ? `· ${match.hora}` : ""}</span>
         <span style={{ padding: "2px 8px", fontWeight: 700, background: finalized ? ELEVATED : `${FLUOR}1A`, color: finalized ? MUTED : FLUOR, border: `1px solid ${finalized ? LINE : FLUOR}` }}>
-          {finalized ? "FINALIZADO" : "EN VIVO"}
+          {finalized ? "FINALIZADO" : pendiente ? "POR INICIAR" : "EN VIVO"}
         </span>
       </div>
       <button type="button" onClick={onClick} style={{ display: "block", width: "100%", textAlign: "left", background: "transparent", border: "none", padding: 0, cursor: "pointer" }}>
@@ -1526,6 +1784,150 @@ function MatchCard({ db, match, onClick, onEdit, onDelete }) {
           {onEdit && <button type="button" onClick={onEdit} className="font-mono-tech" style={{ display: "flex", alignItems: "center", gap: 4, padding: "6px 10px", fontSize: 11, fontWeight: 700, color: TEXT, background: ELEVATED, border: `1px solid ${LINE}`, cursor: "pointer" }}><Pencil size={13} /> EDITAR</button>}
           {onDelete && <button type="button" onClick={onDelete} className="font-mono-tech" style={{ display: "flex", alignItems: "center", gap: 4, padding: "6px 10px", fontSize: 11, fontWeight: 700, background: "transparent", color: RED, border: `1px solid ${LINE}`, cursor: "pointer" }}><Trash2 size={13} /> BORRAR</button>}
         </div>
+      )}
+    </div>
+  );
+}
+
+function MatchesView({ db, commit, setView, ligaId, canEdit, isAdmin, isLigaOrganizer }) {
+  const [filter, setFilter] = useState("todos");
+  const [editTarget, setEditTarget] = useState(null);
+  const [deleteTarget, setDeleteTarget] = useState(null);
+
+  const gestionaLiga = Boolean(isAdmin || isLigaOrganizer);
+  const partidosLiga = useMemo(() => matchesOf(db, ligaId), [db, ligaId]);
+
+  const filtrados = useMemo(() => {
+    return partidosLiga
+      .filter((m) => (filter === "todos" ? true : m.estado === filter))
+      .sort((a, b) => `${b.fecha || ""}${b.hora || ""}`.localeCompare(`${a.fecha || ""}${a.hora || ""}`));
+  }, [partidosLiga, filter]);
+
+  const porFecha = useMemo(() => {
+    const map = new Map();
+    for (const m of filtrados) {
+      const k = m.fecha || "Sin fecha";
+      if (!map.has(k)) map.set(k, []);
+      map.get(k).push(m);
+    }
+    return Array.from(map.entries());
+  }, [filtrados]);
+
+  const reabrirDesdeListado = (matchId) => {
+    if (!gestionaLiga) return;
+    commit((prev) => ({
+      ...prev,
+      matches: prev.matches.map((m) => (m.id === matchId ? { ...m, estado: "en_curso" } : m)),
+    }));
+  };
+
+  return (
+    <div>
+      <BackBar
+        onBack={() => setView({ name: "home" })}
+        title="Partidos"
+        right={
+          canEdit && (
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              {gestionaLiga && (
+                <button
+                  type="button"
+                  onClick={() => setView({ name: "fixture" })}
+                  style={{ ...btnGhost, display: "flex", alignItems: "center", gap: 6, padding: "8px 12px" }}
+                >
+                  <Sparkles size={14} /> GENERAR FIXTURE
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setView({ name: "new-match" })}
+                style={{ ...btnPrimary, display: "flex", alignItems: "center", gap: 6, padding: "8px 14px" }}
+              >
+                <Plus size={15} /> NUEVO PARTIDO
+              </button>
+            </div>
+          )
+        }
+      />
+
+      <div style={{ marginBottom: 16, display: "flex", flexWrap: "wrap", gap: 6 }}>
+        {[
+          ["todos", "Todos"],
+          ["en_curso", "En curso"],
+          ["pendiente", "Por iniciar"],
+          ["finalizado", "Finalizados"],
+        ].map(([k, label]) => (
+          <button
+            key={k}
+            type="button"
+            onClick={() => setFilter(k)}
+            className="font-mono-tech"
+            style={{
+              padding: "7px 12px",
+              fontSize: 11,
+              fontWeight: 700,
+              textTransform: "uppercase",
+              cursor: "pointer",
+              background: filter === k ? FLUOR : SURFACE,
+              color: filter === k ? INK : MUTED,
+              border: `1px solid ${filter === k ? FLUOR : LINE}`,
+            }}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {porFecha.length === 0 ? (
+        <EmptyState
+          text="No hay partidos para el filtro seleccionado."
+          action={
+            canEdit ? (
+              <button type="button" onClick={() => setView({ name: "new-match" })} style={{ ...btnPrimary, marginTop: 12 }}>
+                Crear primer partido
+              </button>
+            ) : null
+          }
+        />
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+          {porFecha.map(([fecha, lista]) => (
+            <div key={fecha}>
+              <p className="font-mono-tech" style={{ marginBottom: 8, fontSize: 11, fontWeight: 800, color: MUTED, letterSpacing: "0.08em" }}>
+                {fecha === "Sin fecha" ? "SIN FECHA PROGRAMADA" : fmtFecha(fecha).toUpperCase()}
+              </p>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {lista.map((m) => {
+                  const puedeEditarEste = gestionaLiga || (canEdit && m.estado !== "finalizado");
+                  return (
+                    <MatchCard
+                      key={m.id}
+                      db={db}
+                      match={m}
+                      onClick={() => setView({ name: "match", matchId: m.id })}
+                      onEdit={puedeEditarEste ? () => setEditTarget(m) : undefined}
+                      onDelete={gestionaLiga ? () => setDeleteTarget(m) : undefined}
+                    />
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {editTarget && (
+        <EditMatchModal
+          db={db}
+          match={db.matches.find((m) => m.id === editTarget.id) || editTarget}
+          commit={commit}
+          onClose={() => setEditTarget(null)}
+          onReopen={() => reabrirDesdeListado(editTarget.id)}
+          isAdmin={gestionaLiga}
+        />
+      )}
+      {deleteTarget && gestionaLiga && (
+        <DeleteMatchModal db={db} match={deleteTarget} commit={commit} onClose={() => setDeleteTarget(null)} />
       )}
     </div>
   );
@@ -1548,7 +1950,7 @@ function NewMatchView({ db, commit, setView, ligaId, isAdmin, isLigaOrganizer })
     if (equipoA === equipoB) { setError("El equipo local y el visitante no pueden ser el mismo."); return; }
     const match = {
       id: uid("m"), liga_id: ligaId, equipo_a_id: equipoA, equipo_b_id: equipoB,
-      fecha, hora: hora || null, lugar: lugar || null, estado: "en_curso",
+      fecha, hora: hora || null, lugar: lugar || null, estado: "pendiente",
       resultado_equipo_a: 0, resultado_equipo_b: 0,
     };
     commit((prev) => ({ ...prev, matches: [...prev.matches, match] }));
@@ -1710,127 +2112,42 @@ function DeleteMatchModal({ db, match, commit, onClose, afterDelete }) {
   );
 }
 
-// ---------- listado de partidos organizado por rondas / fechas ----------
-
-function MatchesView({ db, commit, setView, ligaId, canEdit, isAdmin, isLigaOrganizer }) {
-  const [filter, setFilter] = useState("todos");
-  const [editTarget, setEditTarget] = useState(null);
-  const [deleteTarget, setDeleteTarget] = useState(null);
-  const gestionaLiga = Boolean(isAdmin || isLigaOrganizer);
-
-  const reabrirDesdeListado = (matchId) => {
-    if (!gestionaLiga) return;
-    commit((prev) => ({ ...prev, matches: prev.matches.map((m) => (m.id === matchId ? { ...m, estado: "en_curso" } : m)) }));
-  };
-
-  const partidosLiga = matchesOf(db, ligaId);
-  const sorted = [...partidosLiga].sort((a, b) => (a.fecha + (a.hora || "")).localeCompare(b.fecha + (b.hora || "")));
-  const list = sorted.filter((m) => (filter === "todos" ? true : m.estado === filter));
-
-  // Agrupar partidos por Fecha / Jornada (por campo `fecha`)
-  const rondasAgrupadas = useMemo(() => {
-    const map = new Map();
-    list.forEach((m) => {
-      const key = m.fecha || "Sin fecha";
-      if (!map.has(key)) map.set(key, []);
-      map.get(key).push(m);
-    });
-
-    const entries = Array.from(map.entries()).sort((a, b) => a[0].localeCompare(b[0]));
-    return entries.map(([fecha, matches], idx) => ({
-      nroRonda: idx + 1,
-      fecha,
-      matches,
-    }));
-  }, [list]);
-
-  return (
-    <div>
-      <BackBar
-        onBack={() => setView({ name: "home" })}
-        title="Partidos"
-        right={
-          gestionaLiga ? (
-            <button
-              type="button"
-              onClick={() => setView({ name: "fixture" })}
-              style={{ ...btnPrimary, display: "flex", alignItems: "center", gap: 6, padding: "8px 12px" }}
-            >
-              <Sparkles size={14} /> GENERAR FIXTURE
-            </button>
-          ) : null
-        }
-      />
-
-      <div style={{ marginBottom: 16, display: "inline-flex", border: `1px solid ${LINE}`, background: SURFACE, padding: 3 }}>
-        {[["todos", "Todos"], ["en_curso", "En curso"], ["finalizado", "Finalizados"]].map(([val, label]) => (
-          <button
-            type="button"
-            key={val}
-            onClick={() => setFilter(val)}
-            className="font-mono-tech"
-            style={{ padding: "6px 14px", fontSize: 12, fontWeight: 700, textTransform: "uppercase", cursor: "pointer", background: filter === val ? FLUOR : "transparent", color: filter === val ? INK : MUTED, border: "none" }}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-
-      {rondasAgrupadas.length === 0 ? (
-        <EmptyState text="No hay partidos para este filtro." />
-      ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-          {rondasAgrupadas.map((ronda) => (
-            <div key={ronda.fecha} style={cardStyle}>
-              {/* Encabezado de la Ronda / Fecha */}
-              <div style={{ borderBottom: `1px solid ${LINE}`, padding: "12px 18px", background: ELEVATED, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
-                <span className="font-mono-tech" style={{ fontSize: 13, fontWeight: 900, color: FLUOR }}>
-                  RONDA / FECHA {String(ronda.nroRonda).padStart(2, "0")}
-                </span>
-                <span className="font-mono-tech" style={{ fontSize: 11, color: MUTED }}>
-                  📅 {fmtFecha(ronda.fecha)} · {ronda.matches.length} {ronda.matches.length === 1 ? "partido" : "partidos"} en el día
-                </span>
-              </div>
-
-              {/* Grilla de partidos de esa fecha */}
-              <div style={{ padding: 12, display: "grid", gap: 10, gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))" }}>
-                {ronda.matches.map((m) => {
-                  const puedeEditarEste = gestionaLiga || (canEdit && m.estado === "en_curso");
-                  return (
-                    <MatchCard
-                      key={m.id}
-                      db={db}
-                      match={m}
-                      onClick={() => setView({ name: "match", matchId: m.id })}
-                      onEdit={puedeEditarEste ? () => setEditTarget(m) : undefined}
-                      onDelete={gestionaLiga ? () => setDeleteTarget(m) : undefined}
-                    />
-                  );
-                })}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {editTarget && (
-        <EditMatchModal
-          db={db}
-          match={db.matches.find((m) => m.id === editTarget.id) || editTarget}
-          commit={commit}
-          onClose={() => setEditTarget(null)}
-          onReopen={() => reabrirDesdeListado(editTarget.id)}
-          isAdmin={gestionaLiga}
-        />
-      )}
-      {deleteTarget && gestionaLiga && (
-        <DeleteMatchModal db={db} match={deleteTarget} commit={commit} onClose={() => setDeleteTarget(null)} />
-      )}
-    </div>
-  );
+// ---------- live match ----------
+function fmtRelojNeto(totalSegundos) {
+  const segs = Math.max(0, Math.floor(totalSegundos || 0));
+  const mm = String(Math.floor(segs / 60)).padStart(2, "0");
+  const ss = String(segs % 60).padStart(2, "0");
+  return `${mm}:${ss}`;
 }
 
-// ---------- live match ----------
+function calcularSegundosActuales(match) {
+  if (!match) return 0;
+  const base = match.reloj_segundos || 0;
+  if (!match.reloj_corriendo || !match.reloj_actualizado_en) return base;
+  const diff = Math.floor((Date.now() - new Date(match.reloj_actualizado_en).getTime()) / 1000);
+  return base + Math.max(0, diff);
+}
+
+const ACCIONES = [
+  { id: "gol", label: "Gol", field: "puntos", val: (x) => x.puntos, tono: "gol" },
+  { id: "fallo", label: "Fallo", field: "tiros", val: (x) => x.tiros - x.puntos },
+  { id: "asist", label: "Asist.", field: "asistencias", val: (x) => x.asistencias },
+  { id: "reb", label: "Reb.", field: "rebotes", val: (x) => x.rebotes },
+  { id: "robo", label: "Robo", field: "robos", val: (x) => x.robos },
+  { id: "perd", label: "Pérd.", field: "perdidas", val: (x) => x.perdidas },
+  { id: "fp", label: "Free pass", field: "free_pass", val: (x) => x.free_pass, tono: "falta" },
+  { id: "pen", label: "Penal", field: "penales", val: (x) => x.penales, tono: "falta" },
+  { id: "am", label: "Amarilla", field: "amarillas", val: (x) => x.amarillas, tono: "amarilla" },
+  { id: "ro", label: "Roja", field: "rojas", val: (x) => x.rojas, tono: "roja" },
+];
+
+const resumenStats = (x) => {
+  const partes = [];
+  if (x.puntos) partes.push(`${x.puntos} pts`);
+  if (x.tiros) partes.push(`tiros ${x.puntos}/${x.tiros}`);
+  [[x.asistencias, "as"], [x.rebotes, "reb"], [x.robos, "rob"], [x.perdidas, "pér"], [x.free_pass, "FP"], [x.penales, "pen"]].forEach(([n, l]) => { if (n) partes.push(`${n} ${l}`); });
+  return partes.length ? partes.join(" · ") : "Sin acciones";
+};
 
 function MatchView({ db, commit, matchId, setView, canEdit, isAdmin, isLigaOrganizer, setToast }) {
   const match = db.matches.find((m) => m.id === matchId);
@@ -1839,14 +2156,137 @@ function MatchView({ db, commit, matchId, setView, canEdit, isAdmin, isLigaOrgan
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [dorsalTarget, setDorsalTarget] = useState(null);
   const [tab, setTab] = useState("a");
+  const [vistaLog, setVistaLog] = useState(false);
+
+  const [segundosNetos, setSegundosNetos] = useState(() => calcularSegundosActuales(match));
+  const [eventos, setEventos] = useState([]);
+  const [cargandoEventos, setCargandoEventos] = useState(false);
 
   const gestionaLiga = Boolean(isAdmin || isLigaOrganizer);
+  const pendiente = match?.estado === "pendiente";
+  const finalized = match?.estado === "finalizado";
+  const enCurso = match?.estado === "en_curso";
+
+  useEffect(() => {
+    setSegundosNetos(calcularSegundosActuales(match));
+    if (!match?.reloj_corriendo || match?.estado !== "en_curso") return;
+    const id = setInterval(() => {
+      setSegundosNetos(calcularSegundosActuales(match));
+    }, 1000);
+    return () => clearInterval(id);
+  }, [match?.id, match?.reloj_corriendo, match?.reloj_segundos, match?.reloj_actualizado_en, match?.estado]);
+
+  const cargarLogEventos = useCallback(async () => {
+    if (!matchId) return;
+    setCargandoEventos(true);
+    const { data, error } = await supabase
+      .from("match_events")
+      .select("*")
+      .eq("partido_id", matchId)
+      .order("segundo_neto", { ascending: false })
+      .order("creado_en", { ascending: false });
+    if (!error && data) setEventos(data);
+    setCargandoEventos(false);
+  }, [matchId]);
+
+  useEffect(() => {
+    cargarLogEventos();
+    if (finalized) return;
+    const poll = setInterval(() => {
+      cargarLogEventos();
+    }, 60000);
+    return () => clearInterval(poll);
+  }, [cargarLogEventos, finalized]);
+
+  const registrarEvento = async ({ jugadorId = null, equipoId = null, tipo, detalle, segOverride = null }) => {
+    const seg = segOverride !== null ? segOverride : calcularSegundosActuales(match);
+    const nuevo = {
+      id: uid(),
+      partido_id: matchId,
+      jugador_id: jugadorId,
+      equipo_id: equipoId,
+      tipo,
+      detalle,
+      segundo_neto: seg,
+      creado_en: new Date().toISOString(),
+    };
+    setEventos((prev) => [nuevo, ...prev]);
+    await supabase.from("match_events").insert(nuevo);
+  };
 
   if (!match) {
     return (<div><BackBar onBack={() => setView({ name: "matches" })} title="Partido" /><EmptyState text="Este partido ya no existe." /></div>);
   }
 
-  const finalized = match.estado === "finalizado";
+  const iniciarPartidoManual = () => {
+    if (!canEdit || !pendiente) return;
+    const ahora = new Date();
+    const hh = String(ahora.getHours()).padStart(2, "0");
+    const mm = String(ahora.getMinutes()).padStart(2, "0");
+    const horaReal = `${hh}:${mm}`;
+    const isoAhora = ahora.toISOString();
+
+    commit((prev) => ({
+      ...prev,
+      matches: prev.matches.map((m) =>
+        m.id === matchId
+          ? {
+              ...m,
+              estado: "en_curso",
+              hora_inicio_real: horaReal,
+              reloj_segundos: 0,
+              reloj_corriendo: true,
+              reloj_actualizado_en: isoAhora,
+            }
+          : m
+      ),
+    }));
+    registrarEvento({ tipo: "INICIO", detalle: `Inicio del partido (${horaReal} hs)`, segOverride: 0 });
+    setToast(`Partido iniciado a las ${horaReal} hs.`);
+  };
+
+  const toggleReloj = () => {
+    if (!canEdit || !enCurso) return;
+    const actual = calcularSegundosActuales(match);
+    const proximoEstado = !match.reloj_corriendo;
+    const isoAhora = new Date().toISOString();
+
+    commit((prev) => ({
+      ...prev,
+      matches: prev.matches.map((m) =>
+        m.id === matchId
+          ? {
+              ...m,
+              reloj_segundos: actual,
+              reloj_corriendo: proximoEstado,
+              reloj_actualizado_en: isoAhora,
+            }
+          : m
+      ),
+    }));
+  };
+
+  const sumarTiempoReloj = (deltaSegundos) => {
+    if (!canEdit || finalized) return;
+    const actual = calcularSegundosActuales(match);
+    const nuevoTotal = Math.max(0, actual + deltaSegundos);
+    const isoAhora = new Date().toISOString();
+
+    commit((prev) => ({
+      ...prev,
+      matches: prev.matches.map((m) =>
+        m.id === matchId
+          ? {
+              ...m,
+              reloj_segundos: nuevoTotal,
+              reloj_actualizado_en: isoAhora,
+            }
+          : m
+      ),
+    }));
+    setSegundosNetos(nuevoTotal);
+  };
+
   const canEditMatchMeta = gestionaLiga || (canEdit && !finalized);
   const scoreA = matchScore(db, match.id, match.equipo_a_id);
   const scoreB = matchScore(db, match.id, match.equipo_b_id);
@@ -1870,7 +2310,7 @@ function MatchView({ db, commit, matchId, setView, canEdit, isAdmin, isLigaOrgan
   });
 
   const bump = (jugadorId, field, delta) => {
-    if (finalized) return;
+    if (finalized || pendiente) return;
     const jugador = db.players.find((p) => p.id === jugadorId);
     if (!jugador) return;
 
@@ -1900,6 +2340,27 @@ function MatchView({ db, commit, matchId, setView, canEdit, isAdmin, isLigaOrgan
         setToast(`No podés restar el gol: el equipo tiene ${teamAsistencias} asistencia(s) y quedaría con ${teamPuntos + realDelta} punto(s). Restá una asistencia primero.`);
         return;
       }
+    }
+
+    if (delta > 0) {
+      const etiquetas = {
+        puntos: "GOL convertido",
+        tiros: "Tiro fallado",
+        asistencias: "Asistencia",
+        rebotes: "Rebote capturado",
+        robos: "Robo de balón",
+        perdidas: "Pérdida de balón",
+        free_pass: "Falta (Free pass)",
+        penales: "Falta de penal",
+        amarillas: "Tarjeta AMARILLA",
+        rojas: "Tarjeta ROJA (Expulsión)",
+      };
+      registrarEvento({
+        jugadorId: jugador.id,
+        equipoId: jugador.equipo_id,
+        tipo: field.toUpperCase(),
+        detalle: `${verNombre(jugador.nombre)} — ${etiquetas[field] || field}`,
+      });
     }
 
     commit((prev) => {
@@ -1987,6 +2448,22 @@ function MatchView({ db, commit, matchId, setView, canEdit, isAdmin, isLigaOrgan
 
   const entrar = (jugadorId, saleId, zonaDestino = null, contarCambio = false) => {
     if (finalized) return;
+
+    if (saleId || contarCambio) {
+      const entraP = db.players.find((x) => x.id === jugadorId);
+      const saleP = saleId ? db.players.find((x) => x.id === saleId) : null;
+      if (entraP) {
+        registrarEvento({
+          jugadorId: entraP.id,
+          equipoId: entraP.equipo_id,
+          tipo: "CAMBIO",
+          detalle: saleP
+            ? `Cambio: Entra ${verNombre(entraP.nombre)} por ${verNombre(saleP.nombre)}`
+            : `Ingresa ${verNombre(entraP.nombre)}`,
+        });
+      }
+    }
+
     commit((prev) => {
       const stats = [...prev.stats];
       const buscar = (pid) => stats.findIndex((st) => st.partido_id === matchId && st.jugador_id === pid);
@@ -2059,6 +2536,9 @@ function MatchView({ db, commit, matchId, setView, canEdit, isAdmin, isLigaOrgan
   };
 
   const finalize = () => {
+    const segFinal = calcularSegundosActuales(match);
+    registrarEvento({ tipo: "FIN", detalle: "Final del partido", segOverride: segFinal });
+
     commit((prev) => ({
       ...prev,
       stats: prev.stats.map((st) => (st.partido_id === matchId ? { ...st, en_cancha: false, zona: null, dorsal: st.dorsal ?? prev.players.find((pl) => pl.id === st.jugador_id)?.numero ?? null } : st)),
@@ -2066,7 +2546,14 @@ function MatchView({ db, commit, matchId, setView, canEdit, isAdmin, isLigaOrgan
     commit((prev) => ({
       ...prev,
       matches: prev.matches.map((m) => m.id === matchId
-        ? { ...m, estado: "finalizado", resultado_equipo_a: matchScore(prev, matchId, m.equipo_a_id), resultado_equipo_b: matchScore(prev, matchId, m.equipo_b_id) }
+        ? {
+            ...m,
+            estado: "finalizado",
+            reloj_segundos: segFinal,
+            reloj_corriendo: false,
+            resultado_equipo_a: matchScore(prev, matchId, m.equipo_a_id),
+            resultado_equipo_b: matchScore(prev, matchId, m.equipo_b_id),
+          }
         : m),
     }));
     setConfirmOpen(false);
@@ -2086,7 +2573,7 @@ function MatchView({ db, commit, matchId, setView, canEdit, isAdmin, isLigaOrgan
         right={
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <span className="font-mono-tech" style={{ padding: "4px 10px", fontSize: 11, fontWeight: 700, background: finalized ? SURFACE : `${FLUOR}1A`, color: finalized ? MUTED : FLUOR, border: `1px solid ${finalized ? LINE : FLUOR}` }}>
-              {finalized ? "FINALIZADO" : "EN CURSO"}
+              {finalized ? "FINALIZADO" : pendiente ? "POR INICIAR" : "EN CURSO"}
             </span>
             {gestionaLiga && finalized && (
               <button type="button" onClick={reabrir} title="Reabrir para editar estadísticas" className="font-mono-tech" style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 10px", fontSize: 11, fontWeight: 700, color: INK, background: FLUOR, border: "none", cursor: "pointer" }}>
@@ -2126,38 +2613,173 @@ function MatchView({ db, commit, matchId, setView, canEdit, isAdmin, isLigaOrgan
         </div>
       </div>
 
-      {canEdit && !finalized && (
-        <p className="font-mono-tech" style={{ marginBottom: 12, fontSize: 11, color: MUTED }}>
-          [TIP] TOCÁ UN JUGADOR EN CANCHA Y LUEGO LA ACCIÓN EN EL PAD INFERIOR. TOCÁ &quot;CAMBIO&quot; EN CANCHA PARA ENVIARLO AL BANCO Y ELEGIR SU REEMPLAZO.
-        </p>
-      )}
+      {/* PANEL DE RELOJ NETO E INICIO MANUAL */}
+      <div style={{ marginBottom: 16, border: `1px solid ${enCurso ? FLUOR : LINE}`, background: SURFACE, padding: "12px 16px" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <div style={{ border: `1px solid ${LINE}`, background: INK, padding: "6px 14px", display: "flex", alignItems: "center", gap: 8 }}>
+              <Clock size={16} color={match.reloj_corriendo ? FLUOR : MUTED} />
+              <span className="font-mono-tech tabular-nums" style={{ fontSize: 26, fontWeight: 900, color: match.reloj_corriendo ? FLUOR : TEXT, lineHeight: 1 }}>
+                {fmtRelojNeto(segundosNetos)}
+              </span>
+              <span className="font-mono-tech" style={{ fontSize: 10, fontWeight: 700, color: match.reloj_corriendo ? FLUOR : GOLD }}>
+                {pendiente ? "SIN INICIAR" : match.reloj_corriendo ? "NETO ●" : "PAUSADO"}
+              </span>
+            </div>
 
-      {canEdit && finalized && !gestionaLiga && (
-        <div className="font-mono-tech" style={{ marginBottom: 14, border: `1px solid ${GOLD}`, background: `${GOLD}14`, padding: "10px 14px", fontSize: 11, color: GOLD }}>
-          [PARTIDO CERRADO] ESTA PLANILLA YA FUE FINALIZADA. SI NECESITÁS REABRIRLA PARA CORREGIR ALGO, PEDISELO AL ORGANIZADOR DE LA LIGA O AL ADMINISTRADOR ({ADMIN_EMAIL}).
+            {match.hora_inicio_real && (
+              <span className="font-mono-tech" style={{ fontSize: 11, color: MUTED }}>
+                INICIO REAL: <strong style={{ color: TEXT }}>{match.hora_inicio_real} HS</strong>
+              </span>
+            )}
+          </div>
+
+          {canEdit && !finalized && (
+            <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+              {pendiente ? (
+                <button
+                  type="button"
+                  onClick={iniciarPartidoManual}
+                  style={{ ...btnPrimary, display: "flex", alignItems: "center", gap: 6, padding: "10px 16px" }}
+                >
+                  <Play size={15} /> INICIAR PARTIDO AHORA
+                </button>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    onClick={toggleReloj}
+                    className="font-mono-tech"
+                    style={{
+                      display: "flex", alignItems: "center", gap: 6, padding: "8px 12px", fontSize: 11, fontWeight: 800, cursor: "pointer",
+                      background: match.reloj_corriendo ? "#2E200B" : FLUOR,
+                      color: match.reloj_corriendo ? GOLD : INK,
+                      border: `1px solid ${match.reloj_corriendo ? GOLD : FLUOR}`,
+                    }}
+                  >
+                    {match.reloj_corriendo ? <><Pause size={14} /> PARAR RELOJ</> : <><Play size={14} /> REANUDAR</>}
+                  </button>
+
+                  {[
+                    { label: "+1m", seg: 60 },
+                    { label: "+1s", seg: 1 },
+                    { label: "+5s", seg: 5 },
+                    { label: "+10s", seg: 10 },
+                  ].map((adj) => (
+                    <button
+                      key={adj.label}
+                      type="button"
+                      onClick={() => sumarTiempoReloj(adj.seg)}
+                      className="font-mono-tech tabular-nums"
+                      style={{ padding: "8px 9px", fontSize: 11, fontWeight: 800, background: INK, color: TEXT, border: `1px solid ${LINE}`, cursor: "pointer" }}
+                    >
+                      {adj.label}
+                    </button>
+                  ))}
+                </>
+              )}
+            </div>
+          )}
         </div>
-      )}
-
-      <div className="team-tabs" role="tablist">
-        {[["a", match.equipo_a_id, COLOR_A], ["b", match.equipo_b_id, COLOR_B]].map(([k, tid, col]) => (
-          <button key={k} type="button" role="tab" aria-selected={tab === k} onClick={() => setTab(k)}
-            className="font-display"
-            style={{ flex: 1, minWidth: 0, minHeight: 44, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", padding: "0 10px", fontWeight: 800, textTransform: "uppercase", cursor: "pointer", border: tab === k ? `1px solid ${col.ring}` : `1px solid ${LINE}`, background: tab === k ? col.bg : SURFACE, color: tab === k ? col.text : MUTED }}>
-            {teamName(db, tid)}
-          </button>
-        ))}
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-2" style={{ alignItems: "start" }}>
-        <div className="team-panel" data-active={tab === "a"}>
-          <LiveTeamPanel db={db} match={match} teamId={match.equipo_a_id} equipoKey="a" color={COLOR_A} readOnly={finalized || !canEdit} canAddPlayers={canEdit} isAdmin={gestionaLiga}
-            getStat={getStat} bump={bump} entrar={entrar} mandarABanca={mandarABanca} revertirExpulsion={revertirExpulsion} ajustarCambios={ajustarCambios} onEditDorsal={setDorsalTarget} setView={setView} setToast={setToast} rotarZonas={rotarZonas} moverZona={moverZona} setSexo={setSexo} />
-        </div>
-        <div className="team-panel" data-active={tab === "b"}>
-          <LiveTeamPanel db={db} match={match} teamId={match.equipo_b_id} equipoKey="b" color={COLOR_B} readOnly={finalized || !canEdit} canAddPlayers={canEdit} isAdmin={gestionaLiga}
-            getStat={getStat} bump={bump} entrar={entrar} mandarABanca={mandarABanca} revertirExpulsion={revertirExpulsion} ajustarCambios={ajustarCambios} onEditDorsal={setDorsalTarget} setView={setView} setToast={setToast} rotarZonas={rotarZonas} moverZona={moverZona} setSexo={setSexo} />
-        </div>
+      {/* SELECTOR DE VISTA: PLANILLA DE EQUIPOS vs LOG MINUTO A MINUTO */}
+      <div style={{ marginBottom: 14, display: "flex", gap: 4 }}>
+        <button
+          type="button"
+          onClick={() => setVistaLog(false)}
+          className="font-mono-tech"
+          style={{ flex: 1, padding: "9px 12px", fontSize: 11, fontWeight: 800, textTransform: "uppercase", cursor: "pointer", background: !vistaLog ? FLUOR : SURFACE, color: !vistaLog ? INK : MUTED, border: `1px solid ${!vistaLog ? FLUOR : LINE}` }}
+        >
+          PLANILLA Y JUGADORES
+        </button>
+        <button
+          type="button"
+          onClick={() => { setVistaLog(true); cargarLogEventos(); }}
+          className="font-mono-tech"
+          style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, padding: "9px 12px", fontSize: 11, fontWeight: 800, textTransform: "uppercase", cursor: "pointer", background: vistaLog ? FLUOR : SURFACE, color: vistaLog ? INK : MUTED, border: `1px solid ${vistaLog ? FLUOR : LINE}` }}
+        >
+          <Activity size={14} /> MINUTO A MINUTO ({eventos.length})
+        </button>
       </div>
+
+      {vistaLog ? (
+        <div style={cardStyle}>
+          <div style={{ borderBottom: `1px solid ${LINE}`, padding: "12px 16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <span className="font-mono-tech" style={{ fontSize: 11, fontWeight: 800, color: FLUOR }}>
+              CRÓNICA DEL PARTIDO · AUTO-REFRESH 60S
+            </span>
+            <button type="button" onClick={cargarLogEventos} disabled={cargandoEventos} style={{ ...btnGhost, padding: "5px 10px", fontSize: 10 }}>
+              {cargandoEventos ? "ACTUALIZANDO..." : "ACTUALIZAR"}
+            </button>
+          </div>
+          {eventos.length === 0 ? (
+            <div style={{ padding: 20 }}>
+              <EmptyState text={pendiente ? "El partido aún no fue iniciado manualmente." : "Todavía no hay incidencias registradas en el cronómetro."} />
+            </div>
+          ) : (
+            <div>
+              {eventos.map((ev, i) => {
+                const esA = ev.equipo_id === match.equipo_a_id;
+                const esB = ev.equipo_id === match.equipo_b_id;
+                const colEquipo = esA ? COLOR_A.text : esB ? COLOR_B.text : FLUOR;
+                const minDisplay = `${Math.floor((ev.segundo_neto || 0) / 60) + 1}'`;
+                return (
+                  <div key={ev.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "11px 16px", borderBottom: i === eventos.length - 1 ? "none" : `1px solid ${LINE}` }}>
+                    <div className="font-mono-tech tabular-nums" style={{ minWidth: 64, textAlign: "center", border: `1px solid ${LINE}`, background: INK, padding: "4px 6px" }}>
+                      <div style={{ fontSize: 13, fontWeight: 900, color: FLUOR }}>{minDisplay}</div>
+                      <div style={{ fontSize: 9, color: MUTED }}>{fmtRelojNeto(ev.segundo_neto)}</div>
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      {ev.equipo_id && (
+                        <p className="font-mono-tech" style={{ fontSize: 10, fontWeight: 800, textTransform: "uppercase", color: colEquipo }}>
+                          {teamName(db, ev.equipo_id)}
+                        </p>
+                      )}
+                      <p style={{ fontSize: 13, fontWeight: 600, color: TEXT }}>{ev.detalle}</p>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      ) : (
+        <>
+          {canEdit && enCurso && (
+            <p className="font-mono-tech" style={{ marginBottom: 12, fontSize: 11, color: MUTED }}>
+              [TIP] TOCÁ UN JUGADOR EN CANCHA Y LUEGO LA ACCIÓN EN EL PAD INFERIOR. TOCÁ &quot;CAMBIO&quot; EN CANCHA PARA ENVIARLO AL BANCO Y ELEGIR SU REEMPLAZO.
+            </p>
+          )}
+
+          {canEdit && finalized && !gestionaLiga && (
+            <div className="font-mono-tech" style={{ marginBottom: 14, border: `1px solid ${GOLD}`, background: `${GOLD}14`, padding: "10px 14px", fontSize: 11, color: GOLD }}>
+              [PARTIDO CERRADO] ESTA PLANILLA YA FUE FINALIZADA. SI NECESITÁS REABRIRLA PARA CORREGIR ALGÚN DATO, PEDISELO AL ORGANIZADOR DE LA LIGA O AL ADMINISTRADOR.
+            </div>
+          )}
+
+          <div className="team-tabs" role="tablist">
+            {[["a", match.equipo_a_id, COLOR_A], ["b", match.equipo_b_id, COLOR_B]].map(([k, tid, col]) => (
+              <button key={k} type="button" role="tab" aria-selected={tab === k} onClick={() => setTab(k)}
+                className="font-display"
+                style={{ flex: 1, minWidth: 0, minHeight: 44, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", padding: "0 10px", fontWeight: 800, textTransform: "uppercase", cursor: "pointer", border: tab === k ? `1px solid ${col.ring}` : `1px solid ${LINE}`, background: tab === k ? col.bg : SURFACE, color: tab === k ? col.text : MUTED }}>
+                {teamName(db, tid)}
+              </button>
+            ))}
+          </div>
+
+          <div className="grid gap-6 lg:grid-cols-2" style={{ alignItems: "start" }}>
+            <div className="team-panel" data-active={tab === "a"}>
+              <LiveTeamPanel db={db} match={match} teamId={match.equipo_a_id} equipoKey="a" color={COLOR_A} readOnly={finalized || !canEdit} canAddPlayers={canEdit} isAdmin={gestionaLiga}
+                getStat={getStat} bump={bump} entrar={entrar} mandarABanca={mandarABanca} revertirExpulsion={revertirExpulsion} ajustarCambios={ajustarCambios} onEditDorsal={setDorsalTarget} setView={setView} setToast={setToast} rotarZonas={rotarZonas} moverZona={moverZona} setSexo={setSexo} />
+            </div>
+            <div className="team-panel" data-active={tab === "b"}>
+              <LiveTeamPanel db={db} match={match} teamId={match.equipo_b_id} equipoKey="b" color={COLOR_B} readOnly={finalized || !canEdit} canAddPlayers={canEdit} isAdmin={gestionaLiga}
+                getStat={getStat} bump={bump} entrar={entrar} mandarABanca={mandarABanca} revertirExpulsion={revertirExpulsion} ajustarCambios={ajustarCambios} onEditDorsal={setDorsalTarget} setView={setView} setToast={setToast} rotarZonas={rotarZonas} moverZona={moverZona} setSexo={setSexo} />
+            </div>
+          </div>
+        </>
+      )}
 
       <div style={{ marginTop: 32, display: "flex", justifyContent: "center" }}>
         {!canEdit ? null : finalized ? (
@@ -2166,11 +2788,11 @@ function MatchView({ db, commit, matchId, setView, canEdit, isAdmin, isLigaOrgan
               <Unlock size={16} /> Reabrir para corregir estadísticas
             </button>
           ) : null
-        ) : (
+        ) : enCurso ? (
           <button type="button" onClick={() => setConfirmOpen(true)} style={{ ...btnDanger, display: "flex", alignItems: "center", gap: 8, padding: "14px 24px", fontSize: 13 }}>
             <Trophy size={16} /> Finalizar partido
           </button>
-        )}
+        ) : null}
       </div>
 
       {confirmOpen && (
@@ -2197,28 +2819,6 @@ function MatchView({ db, commit, matchId, setView, canEdit, isAdmin, isLigaOrgan
     </div>
   );
 }
-
-// ---------- Partido en vivo ----------
-const ACCIONES = [
-  { id: "gol", label: "Gol", field: "puntos", val: (x) => x.puntos, tono: "gol" },
-  { id: "fallo", label: "Fallo", field: "tiros", val: (x) => x.tiros - x.puntos },
-  { id: "asist", label: "Asist.", field: "asistencias", val: (x) => x.asistencias },
-  { id: "reb", label: "Reb.", field: "rebotes", val: (x) => x.rebotes },
-  { id: "robo", label: "Robo", field: "robos", val: (x) => x.robos },
-  { id: "perd", label: "Pérd.", field: "perdidas", val: (x) => x.perdidas },
-  { id: "fp", label: "Free pass", field: "free_pass", val: (x) => x.free_pass, tono: "falta" },
-  { id: "pen", label: "Penal", field: "penales", val: (x) => x.penales, tono: "falta" },
-  { id: "am", label: "Amarilla", field: "amarillas", val: (x) => x.amarillas, tono: "amarilla" },
-  { id: "ro", label: "Roja", field: "rojas", val: (x) => x.rojas, tono: "roja" },
-];
-
-const resumenStats = (x) => {
-  const partes = [];
-  if (x.puntos) partes.push(`${x.puntos} pts`);
-  if (x.tiros) partes.push(`tiros ${x.puntos}/${x.tiros}`);
-  [[x.asistencias, "as"], [x.rebotes, "reb"], [x.robos, "rob"], [x.perdidas, "pér"], [x.free_pass, "FP"], [x.penales, "pen"]].forEach(([n, l]) => { if (n) partes.push(`${n} ${l}`); });
-  return partes.length ? partes.join(" · ") : "Sin acciones";
-};
 
 function Tarjetas({ s }) {
   if (!s.amarillas && !s.rojas) return null;
@@ -3315,7 +3915,11 @@ function FixtureGeneratorView({ db, commit, setView, setToast, liga, ligaId }) {
         fecha: p.fecha || fechaInicio,
         hora: p.hora || null,
         lugar: p.lugar?.trim() || null,
-        estado: "en_curso",
+        estado: "pendiente",
+        hora_inicio_real: null,
+        reloj_segundos: 0,
+        reloj_corriendo: false,
+        reloj_actualizado_en: null,
         resultado_equipo_a: 0,
         resultado_equipo_b: 0,
       }))
@@ -3348,7 +3952,7 @@ function FixtureGeneratorView({ db, commit, setView, setToast, liga, ligaId }) {
           action={<button type="button" onClick={() => setView({ name: "teams" })} style={{ ...btnPrimary, marginTop: 12 }}>Ir a Equipos</button>}
         />
       ) : (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(12, 1fr)", gap: 20, alignItems: "start" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(12, minmax(0, 1fr))", gap: 20, alignItems: "start" }}>
           {/* Panel de configuración */}
           <div className="col-span-12 lg:col-span-5" style={{ ...cardStyle, padding: 20, display: "flex", flexDirection: "column", gap: 16 }}>
             <div style={{ borderBottom: `1px solid ${LINE}`, paddingBottom: 10 }}>
