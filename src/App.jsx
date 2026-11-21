@@ -43,6 +43,7 @@ import {
 import { supabase } from "./lib/supabase";
 import { loadDb, saveDiff } from "./lib/syncDb";
 import TournamentView from "./components/TournamentView";
+import { computeStandings } from "./lib/standings";
 import {
   ADMIN_EMAIL,
   isSuperAdmin,
@@ -4304,74 +4305,10 @@ function StandingsView({ db, setView, ligaId, liga }) {
   const equipos = useMemo(() => teamsOf(db, ligaId), [db, ligaId]);
   const partidosLiga = useMemo(() => matchesOf(db, ligaId), [db, ligaId]);
 
-  const tabla = useMemo(() => {
-    const map = new Map();
-    equipos.forEach((t) => {
-      map.set(t.id, {
-        equipoId: t.id,
-        nombre: t.nombre,
-        pj: 0,
-        pg: 0,
-        pe: 0,
-        pp: 0,
-        gf: 0,
-        gc: 0,
-        dif: 0,
-        pts: 0,
-      });
-    });
-
-    for (const m of partidosLiga) {
-      if (m.estado !== "finalizado") continue;
-      const gA = matchScore(db, m.id, m.equipo_a_id);
-      const gB = matchScore(db, m.id, m.equipo_b_id);
-
-      const regA = map.get(m.equipo_a_id);
-      const regB = map.get(m.equipo_b_id);
-
-      if (regA) {
-        regA.pj += 1;
-        regA.gf += gA;
-        regA.gc += gB;
-      }
-      if (regB) {
-        regB.pj += 1;
-        regB.gf += gB;
-        regB.gc += gA;
-      }
-
-      if (!regA || !regB) continue;
-
-      if (gA > gB) {
-        regA.pg += 1;
-        regA.pts += 3;
-        regB.pp += 1;
-      } else if (gB > gA) {
-        regB.pg += 1;
-        regB.pts += 3;
-        regA.pp += 1;
-      } else {
-        regA.pe += 1;
-        regA.pts += 1;
-        regB.pe += 1;
-        regB.pts += 1;
-      }
-    }
-
-    const rows = Array.from(map.values()).map((r) => ({
-      ...r,
-      dif: r.gf - r.gc,
-    }));
-
-    rows.sort((a, b) => {
-      if (b.pts !== a.pts) return b.pts - a.pts;
-      if (b.dif !== a.dif) return b.dif - a.dif;
-      if (b.gf !== a.gf) return b.gf - a.gf;
-      return collator.compare(a.nombre, b.nombre);
-    });
-
-    return rows;
-  }, [equipos, partidosLiga, db]);
+  const tabla = useMemo(
+    () => computeStandings(equipos, partidosLiga, (mId, tId) => matchScore(db, mId, tId)),
+    [equipos, partidosLiga, db]
+  );
 
   const partidosFinalizados = partidosLiga.filter((m) => m.estado === "finalizado").length;
 
