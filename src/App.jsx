@@ -43,28 +43,47 @@ import {
 import { supabase } from "./lib/supabase";
 import { loadDb, saveDiff } from "./lib/syncDb";
 import TournamentView from "./components/TournamentView";
-
-const ADMIN_EMAIL = "toblanqui@outlook.com";
-const isSuperAdmin = (email) => (email || "").trim().toLowerCase() === ADMIN_EMAIL;
-
-const STAT_FIELDS = [
-  { key: "puntos", label: "Puntos", short: "Pts" },
-  { key: "tiros", label: "Tiros", short: "Tiros" },
-  { key: "asistencias", label: "Asistencias", short: "Asist" },
-  { key: "rebotes", label: "Rebotes", short: "Reb" },
-  { key: "robos", label: "Robos", short: "Rob" },
-  { key: "perdidas", label: "Pérdidas", short: "Pérd" },
-];
-
-const SEXO = {
-  varon: { sim: "♂", nombre: "Varón", color: "#38BDF8" },
-  mujer: { sim: "♀", nombre: "Mujer", color: "#F472B6" },
-};
-
-const EN_CANCHA = 8;
-const POR_ZONA = 4;
-const POR_SEXO = 2;
-const MAX_CAMBIOS = 8;
+import {
+  ADMIN_EMAIL,
+  isSuperAdmin,
+  STAT_FIELDS,
+  SEXO,
+  EN_CANCHA,
+  POR_ZONA,
+  POR_SEXO,
+  MAX_CAMBIOS,
+  EXTRA_FIELDS,
+  TEAM_SEED,
+  SAVE_DELAY,
+  INK,
+  SURFACE,
+  ELEVATED,
+  LINE,
+  CLUB,
+  FLUOR,
+  GOLD,
+  TEXT,
+  MUTED,
+  FAINT,
+  RED,
+  ORANGE,
+  COLOR_A,
+  COLOR_B,
+  ACCIONES,
+} from "./lib/constants";
+import {
+  collator,
+  apellidoDe,
+  porApellido,
+  porNombre,
+  verNombre,
+  fmtFecha,
+  fmtRelojNeto,
+  calcularSegundosActuales,
+  sumarDiasISO,
+  sumarMinutosHora,
+  descargarCSV,
+} from "./lib/formatters";
 
 const elegirZona = (enCancha, sexo) => {
   const cuenta = (z, sx) => enCancha.filter((x) => x.zona === z && (!sx || x.sexo === sx)).length;
@@ -73,15 +92,6 @@ const elegirZona = (enCancha, sexo) => {
   if (hayLugar("defensa")) return "defensa";
   return cuenta("ataque") <= cuenta("defensa") ? "ataque" : "defensa";
 };
-
-const EXTRA_FIELDS = ["free_pass", "penales", "amarillas", "rojas"];
-
-const TEAM_SEED = [
-  "La Patriada A", "La Patriada B", "Escorpiones",
-  "Fosforitos", "Uruguay Korf", "CEF 102",
-];
-
-const SAVE_DELAY = 900;
 
 const esErrorDePermiso = (e) =>
   e?.status === 401 ||
@@ -94,23 +104,6 @@ const explicarError = (e) => {
   if (/failed to fetch|network|load failed/i.test(e?.message || "")) return "Sin conexión. Se reintenta solo cuando vuelva internet.";
   return `Error de la base de datos: ${e?.message || "desconocido"}.`;
 };
-
-// Tokens de paleta 60-30-10 (Estilo Suizo Oscuro + Flúor)
-const INK = "#0B0C0E";
-const SURFACE = "#111317";
-const ELEVATED = "#16191F";
-const LINE = "#24272E";
-const CLUB = "#1E40AF";
-const FLUOR = "#CCFF00";
-const GOLD = "#E3A63E";
-const TEXT = "#F4F4F6";
-const MUTED = "#8E939E";
-const FAINT = "#5C6270";
-const RED = "#FF4D4D";
-const ORANGE = "#FF7A00";
-
-const COLOR_A = { ring: "#2DD4BF", bg: "#0D2927", text: "#5EEAD4", bar: "#14B8A6" };
-const COLOR_B = { ring: "#F97316", bg: "#2E170B", text: "#FDBA74", bar: "#EA580C" };
 
 const cardStyle = { borderRadius: 0, border: `1px solid ${LINE}`, background: SURFACE };
 const inputStyle = {
@@ -694,26 +687,9 @@ function BackBar({ onBack, title, right }) {
   );
 }
 
-// ---------- helpers ----------
+// ---------- helpers de estado / base de datos ----------
 
 const teamName = (db, id) => db.teams.find((t) => t.id === id)?.nombre || "—";
-const collator = new Intl.Collator("es", { sensitivity: "base", numeric: true });
-const apellidoDe = (nombre = "") => {
-  const n = nombre.trim();
-  if (n.includes(",")) return n.split(",")[0].trim();
-  const partes = n.split(/\s+/);
-  return partes[partes.length - 1] || "";
-};
-const porApellido = (a, b) => collator.compare(apellidoDe(a.nombre), apellidoDe(b.nombre)) || collator.compare(a.nombre, b.nombre);
-const porNombre = (a, b) => collator.compare(a.nombre, b.nombre);
-const verNombre = (nombre = "") => {
-  const n = nombre.trim();
-  if (n.includes(",")) return n.replace(/\s*,\s*/, ", ");
-  const partes = n.split(/\s+/);
-  if (partes.length < 2) return n;
-  return `${partes[partes.length - 1]}, ${partes.slice(0, -1).join(" ")}`;
-};
-
 const teamsOf = (db, ligaId) => db.teams.filter((t) => t.liga_id === ligaId).sort(porNombre);
 const matchesOf = (db, ligaId) => db.matches.filter((m) => m.liga_id === ligaId);
 
@@ -722,26 +698,6 @@ function matchScore(db, matchId, teamId) {
     .filter((s) => s.partido_id === matchId)
     .filter((s) => db.players.find((pl) => pl.id === s.jugador_id)?.equipo_id === teamId)
     .reduce((sum, s) => sum + (s.puntos || 0), 0);
-}
-
-function fmtFecha(fecha) {
-  if (!fecha) return "";
-  const [y, m, d] = fecha.split("-");
-  return `${d}/${m}/${y}`;
-}
-
-function descargarCSV(nombreArchivo, filas) {
-  const esc = (v) => {
-    const s = String(v ?? "");
-    return /[";\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-  };
-  const contenido = "\uFEFF" + filas.map((f) => f.map(esc).join(";")).join("\r\n");
-  const blob = new Blob([contenido], { type: "text/csv;charset=utf-8;" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url; a.download = nombreArchivo;
-  document.body.appendChild(a); a.click(); document.body.removeChild(a);
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 function EmptyState({ text, action }) {
@@ -2317,33 +2273,6 @@ function DeleteMatchModal({ db, match, commit, onClose, afterDelete }) {
 }
 
 // ---------- live match ----------
-function fmtRelojNeto(totalSegundos) {
-  const segs = Math.max(0, Math.floor(totalSegundos || 0));
-  const mm = String(Math.floor(segs / 60)).padStart(2, "0");
-  const ss = String(segs % 60).padStart(2, "0");
-  return `${mm}:${ss}`;
-}
-
-function calcularSegundosActuales(match) {
-  if (!match) return 0;
-  const base = match.reloj_segundos || 0;
-  if (!match.reloj_corriendo || !match.reloj_actualizado_en) return base;
-  const diff = Math.floor((Date.now() - new Date(match.reloj_actualizado_en).getTime()) / 1000);
-  return base + Math.max(0, diff);
-}
-
-const ACCIONES = [
-  { id: "gol", label: "Gol", field: "puntos", val: (x) => x.puntos, tono: "gol" },
-  { id: "fallo", label: "Fallo", field: "tiros", val: (x) => x.tiros - x.puntos },
-  { id: "asist", label: "Asist.", field: "asistencias", val: (x) => x.asistencias },
-  { id: "reb", label: "Reb.", field: "rebotes", val: (x) => x.rebotes },
-  { id: "robo", label: "Robo", field: "robos", val: (x) => x.robos },
-  { id: "perd", label: "Pérd.", field: "perdidas", val: (x) => x.perdidas },
-  { id: "fp", label: "Free pass", field: "free_pass", val: (x) => x.free_pass, tono: "falta" },
-  { id: "pen", label: "Penal", field: "penales", val: (x) => x.penales, tono: "falta" },
-  { id: "am", label: "Amarilla", field: "amarillas", val: (x) => x.amarillas, tono: "amarilla" },
-  { id: "ro", label: "Roja", field: "rojas", val: (x) => x.rojas, tono: "roja" },
-];
 
 const resumenStats = (x) => {
   const partes = [];
@@ -3935,22 +3864,6 @@ function StatsView({ db, setView, setToast, ligaId, liga }) {
       </p>
     </div>
   );
-}
-
-function sumarDiasISO(fechaISO, dias) {
-  if (!fechaISO) return "";
-  const [y, m, d] = fechaISO.split("-").map(Number);
-  const dt = new Date(Date.UTC(y, m - 1, d + dias));
-  return dt.toISOString().slice(0, 10);
-}
-
-function sumarMinutosHora(horaStr, mins) {
-  if (!horaStr) return "";
-  const [hh, mm] = horaStr.split(":").map(Number);
-  const total = (hh * 60 + mm + mins) % (24 * 60);
-  const nh = String(Math.floor(total / 60)).padStart(2, "0");
-  const nm = String(total % 60).padStart(2, "0");
-  return `${nh}:${nm}`;
 }
 
 // ---------- generador automático de fixtures con tarjetas desplegables por jornada ----------

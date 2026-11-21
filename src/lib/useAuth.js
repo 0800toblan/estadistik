@@ -1,8 +1,6 @@
 import { useEffect, useState } from "react";
 import { supabase } from "./supabase";
-
-const ADMIN_EMAIL = "toblanqui@outlook.com";
-const isSuperAdmin = (email) => (email || "").trim().toLowerCase() === ADMIN_EMAIL;
+import { isSuperAdmin } from "./constants";
 
 export function useAuth() {
   const [session, setSession] = useState(null);
