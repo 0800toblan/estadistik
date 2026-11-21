@@ -5,7 +5,6 @@ import {
   ListChecks,
   Users,
   BarChart3,
-  Shield,
   KeyRound,
   LogIn,
   Loader2,
@@ -40,7 +39,6 @@ import {
   Activity,
   Terminal,
   ChevronRight,
-  Radio,
 } from "lucide-react";
 import { supabase } from "./lib/supabase";
 import { loadDb, saveDiff } from "./lib/syncDb";
@@ -109,6 +107,7 @@ const TEXT = "#F4F4F6";
 const MUTED = "#8E939E";
 const FAINT = "#5C6270";
 const RED = "#FF4D4D";
+const ORANGE = "#FF7A00";
 
 const COLOR_A = { ring: "#2DD4BF", bg: "#0D2927", text: "#5EEAD4", bar: "#14B8A6" };
 const COLOR_B = { ring: "#F97316", bg: "#2E170B", text: "#FDBA74", bar: "#EA580C" };
@@ -242,11 +241,49 @@ export default function App({ canEdit = false, userEmail = null, userId = null, 
   const [db, setDb] = useState(null);
   const [status, setStatus] = useState("loading");
   const [loadError, setLoadError] = useState("");
-  const [view, setView] = useState({ name: "home" });
   const [toast, setToast] = useState(null);
   const [saveState, setSaveState] = useState("idle");
   const [saveError, setSaveError] = useState("");
   const [ligaId, setLigaId] = useState(null);
+  const [view, _setView] = useState(() => {
+  // Si ya hay un estado guardado en el historial al recargar, lo recupera
+  return window.history.state?.view || { name: "home" };
+});
+
+// Envolvemos setView para que cada cambio de vista registre una entrada en el historial
+const setView = useCallback((nextViewOrUpdater) => {
+  _setView((prev) => {
+    const next = typeof nextViewOrUpdater === "function" ? nextViewOrUpdater(prev) : nextViewOrUpdater;
+    const isSame =
+      prev?.name === next?.name &&
+      prev?.matchId === next?.matchId &&
+      prev?.teamId === next?.teamId;
+
+    if (!isSame) {
+      const hash = next?.name === "home" ? "" : `#${next.name}${next.matchId ? `/${next.matchId}` : next.teamId ? `/${next.teamId}` : ""}`;
+      window.history.pushState({ view: next }, "", `${window.location.pathname}${window.location.search}${hash}`);
+    }
+    return next;
+  });
+}, []);
+
+// Escuchar el botón "Atrás" / "Adelante" del navegador, mouse o celular
+useEffect(() => {
+  if (!window.history.state?.view) {
+    window.history.replaceState({ view: { name: "home" } }, "", window.location.href);
+  }
+
+  const onPopState = (event) => {
+    if (event.state?.view) {
+      _setView(event.state.view);
+    } else {
+      _setView({ name: "home" });
+    }
+  };
+
+  window.addEventListener("popstate", onPopState);
+  return () => window.removeEventListener("popstate", onPopState);
+}, []);
 
   // isAdmin: true únicamente para toblanqui@outlook.com
   const isAdmin = canEdit && isSuperAdmin(userEmail);
@@ -424,8 +461,15 @@ export default function App({ canEdit = false, userEmail = null, userId = null, 
         onLogin={onLogin}
         onLogout={onLogout}
       />
-      <main style={{ maxWidth: 1160, margin: "0 auto", padding: "20px 16px 72px" }}>
-        {view.name === "home" && (<HomeView{...ctx} user={ctx.canEdit} onOpenLogin={() => setLoginOpen(true)} onOpenAdmin={() => setView({ name: "admin" })} />)}
+      <main style={{ width: "100%", maxWidth: view.name === "home" ? 1560 : 1380, margin: "0 auto", padding: "24px clamp(16px, 3vw, 48px) 64px",}}>
+        {view.name === "home" && (
+          <HomeView
+            {...ctx}
+            user={ctx.canEdit}
+            onOpenLogin={onLogin}
+            onOpenAdmin={() => setView({ name: "users" })}
+          />
+        )}
         {view.name === "new" && (canEdit ? <NewMatchView {...ctx} /> : <HomeView {...ctx} />)}
         {view.name === "matches" && <MatchesView {...ctx} />}
         {view.name === "match" && <MatchView {...ctx} matchId={view.matchId} />}
@@ -465,7 +509,6 @@ export default function App({ canEdit = false, userEmail = null, userId = null, 
 function TopNav({ view, setView, saveState, db, liga, setLigaId, canEdit, isAdmin, isLigaOrganizer, userEmail, onLogin, onLogout }) {
   const items = [
     { name: "home", label: "Inicio", icon: Home },
-    { name: "new", label: "Nuevo", icon: Plus },
     { name: "matches", label: "Partidos", icon: ListChecks },
     { name: "teams", label: "Equipos", icon: Users },
     { name: "stats", label: "Estadísticas", icon: BarChart3 },
@@ -1551,23 +1594,23 @@ function HomeView({ db, setView, ligaId, liga, user, canEdit, onOpenLogin, onOpe
   };
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 36 }}>
       {/* CABECERA BRUTALISTA DE LIGA */}
-      <div style={{ borderBottom: `1px solid ${LINE}`, paddingBottom: 14, display: "flex", justifyContent: "space-between", alignItems: "flex-end", flexWrap: "wrap", gap: 10 }}>
+      <div style={{ borderBottom: `1px solid ${LINE}`, paddingBottom: 18, display: "flex", justifyContent: "space-between", alignItems: "flex-end", flexWrap: "wrap", gap: 12 }}>
         <div>
-          <p className="font-mono-tech" style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.14em", color: FLUOR }}>
+          <p className="font-mono-tech" style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.16em", color: FLUOR }}>
             ESTADISTIK // TELEMETRÍA OFICIAL
           </p>
-          <h1 className="font-display" style={{ fontSize: "clamp(1.6rem, 4vw, 2.4rem)", fontWeight: 900, textTransform: "uppercase", lineHeight: 1.05, marginTop: 4 }}>
+          <h1 className="font-display" style={{ fontSize: "clamp(1.9rem, 4.2vw, 3.2rem)", fontWeight: 900, textTransform: "uppercase", lineHeight: 1.02, marginTop: 6, letterSpacing: "-0.02em" }}>
             {liga?.nombre || "TORNEO KORFBALL"}
           </h1>
         </div>
-        <span className="font-mono-tech tabular-nums" style={{ fontSize: 11, color: MUTED, border: `1px solid ${LINE}`, background: SURFACE, padding: "5px 10px" }}>
+        <span className="font-mono-tech tabular-nums" style={{ fontSize: 12, fontWeight: 700, color: MUTED, border: `1px solid ${LINE}`, background: SURFACE, padding: "7px 14px" }}>
           {equiposLiga.length} EQUIPOS · {partidosLiga.length} PARTIDOS
         </span>
       </div>
 
-      {/* HERO CARD: PULSO FLÚOR (EN VIVO O PRÓXIMO PARTIDO) */}
+      {/* BLOQUE SUPERIOR: PARTIDO EN VIVO O PRÓXIMO ENCUENTRO */}
       {partidoEnVivo ? (
         <div
           role="button"
@@ -1586,8 +1629,7 @@ function HomeView({ db, setView, ligaId, liga, user, canEdit, onOpenLogin, onOpe
             overflow: "hidden",
           }}
         >
-          {/* Barra superior de estado en vivo */}
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 16px", background: `${FLUOR}18`, borderBottom: `1px solid ${FLUOR}40` }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 18px", background: `${FLUOR}18`, borderBottom: `1px solid ${FLUOR}40` }}>
             <span className="font-mono-tech" style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11, fontWeight: 900, color: FLUOR, letterSpacing: "0.08em" }}>
               <span style={{ display: "inline-block", width: 8, height: 8, background: FLUOR, boxShadow: `0 0 8px ${FLUOR}` }} />
               EN VIVO · RELOJ NETO {fmtRelojNeto(relojVivo)}
@@ -1597,36 +1639,34 @@ function HomeView({ db, setView, ligaId, liga, user, canEdit, onOpenLogin, onOpe
             </span>
           </div>
 
-          {/* Marcador central */}
-          <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr", alignItems: "center", gap: 12, padding: "18px 16px" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr", alignItems: "center", gap: 16, padding: "22px 20px" }}>
             <div style={{ minWidth: 0 }}>
               <span className="font-mono-tech" style={{ fontSize: 10, color: MUTED }}>LOCAL</span>
-              <p className="font-display" style={{ fontSize: "clamp(1.15rem, 3vw, 1.7rem)", fontWeight: 900, textTransform: "uppercase", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: COLOR_A.text }}>
+              <p className="font-display" style={{ fontSize: "clamp(1.3rem, 3.2vw, 2.2rem)", fontWeight: 900, textTransform: "uppercase", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: COLOR_A.text, marginTop: 2 }}>
                 {teamName(db, partidoEnVivo.equipo_a_id)}
               </p>
             </div>
 
-            <div className="font-mono-tech tabular-nums" style={{ display: "flex", alignItems: "center", gap: 12, border: `1px solid ${LINE}`, background: INK, padding: "8px 16px" }}>
-              <span style={{ fontSize: "clamp(1.8rem, 4.5vw, 2.6rem)", fontWeight: 900, color: "white", lineHeight: 1 }}>{scoreVivoA}</span>
-              <span style={{ fontSize: 16, fontWeight: 700, color: FAINT }}>:</span>
-              <span style={{ fontSize: "clamp(1.8rem, 4.5vw, 2.6rem)", fontWeight: 900, color: "white", lineHeight: 1 }}>{scoreVivoB}</span>
+            <div className="font-mono-tech tabular-nums" style={{ display: "flex", alignItems: "center", gap: 14, border: `1px solid ${LINE}`, background: INK, padding: "10px 20px" }}>
+              <span style={{ fontSize: "clamp(2rem, 4.5vw, 3rem)", fontWeight: 900, color: "white", lineHeight: 1 }}>{scoreVivoA}</span>
+              <span style={{ fontSize: 18, fontWeight: 700, color: FAINT }}>:</span>
+              <span style={{ fontSize: "clamp(2rem, 4.5vw, 3rem)", fontWeight: 900, color: "white", lineHeight: 1 }}>{scoreVivoB}</span>
             </div>
 
             <div style={{ minWidth: 0, textAlign: "right" }}>
               <span className="font-mono-tech" style={{ fontSize: 10, color: MUTED }}>VISITANTE</span>
-              <p className="font-display" style={{ fontSize: "clamp(1.15rem, 3vw, 1.7rem)", fontWeight: 900, textTransform: "uppercase", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: COLOR_B.text }}>
+              <p className="font-display" style={{ fontSize: "clamp(1.3rem, 3.2vw, 2.2rem)", fontWeight: 900, textTransform: "uppercase", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: COLOR_B.text, marginTop: 2 }}>
                 {teamName(db, partidoEnVivo.equipo_b_id)}
               </p>
             </div>
           </div>
 
-          {/* Marquesina continua de última acción detallada (derecha -> izquierda) */}
           <div
             className="estadistik-marquee-wrap"
             style={{
               borderTop: `1px solid ${LINE}`,
               background: INK,
-              padding: "8px 0",
+              padding: "9px 0",
               overflow: "hidden",
               display: "flex",
               alignItems: "center",
@@ -1641,15 +1681,15 @@ function HomeView({ db, setView, ligaId, liga, user, canEdit, onOpenLogin, onOpe
                 fontSize: 10,
                 fontWeight: 900,
                 padding: "2px 8px",
-                marginLeft: 12,
-                marginRight: 10,
+                marginLeft: 14,
+                marginRight: 12,
                 letterSpacing: "0.06em",
               }}
             >
               ÚLTIMA ACCIÓN
             </span>
             <div style={{ overflow: "hidden", flex: 1 }}>
-              <div className="estadistik-marquee-track font-mono-tech" style={{ fontSize: 11, fontWeight: 700, color: TEXT }}>
+              <div className="estadistik-marquee-track font-mono-tech" style={{ fontSize: 12, fontWeight: 700, color: TEXT }}>
                 <span style={{ paddingRight: 48 }}>
                   {ultimaAccionTexto || "SIN INCIDENCIAS REGISTRADAS TODAVÍA"} &nbsp;///&nbsp;
                 </span>
@@ -1665,28 +1705,34 @@ function HomeView({ db, setView, ligaId, liga, user, canEdit, onOpenLogin, onOpe
           role="button"
           tabIndex={0}
           onClick={() => setView({ name: "match", matchId: proximoPartido.id })}
-          style={{ border: `1px solid ${LINE}`, background: SURFACE, padding: "14px 16px", cursor: "pointer" }}
+          style={{ border: `1px solid ${LINE}`, background: SURFACE, padding: "18px 20px", cursor: "pointer" }}
         >
-          <div className="font-mono-tech" style={{ display: "flex", justifyContent: "space-between", fontSize: 10, fontWeight: 800, color: GOLD, marginBottom: 8 }}>
+          <div className="font-mono-tech" style={{ display: "flex", justifyContent: "space-between", fontSize: 11, fontWeight: 800, color: ORANGE, marginBottom: 12 }}>
             <span>PRÓXIMO ENCUENTRO PROGRAMADO</span>
             <span>{fmtFecha(proximoPartido.fecha)} {proximoPartido.hora ? `· ${proximoPartido.hora} HS` : ""}</span>
           </div>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
-            <span className="font-display" style={{ fontSize: 18, fontWeight: 900, textTransform: "uppercase", color: COLOR_A.text }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+            <span className="font-display" style={{ fontSize: "clamp(1.25rem, 2.6vw, 1.9rem)", fontWeight: 900, textTransform: "uppercase", color: COLOR_A.text }}>
               {teamName(db, proximoPartido.equipo_a_id)}
             </span>
-            <span className="font-mono-tech" style={{ fontSize: 11, fontWeight: 800, color: MUTED, padding: "2px 8px", border: `1px solid ${LINE}`, background: INK }}>
+            <span className="font-mono-tech" style={{ fontSize: 12, fontWeight: 800, color: MUTED, padding: "4px 12px", border: `1px solid ${LINE}`, background: INK }}>
               VS
             </span>
-            <span className="font-display" style={{ fontSize: 18, fontWeight: 900, textTransform: "uppercase", color: COLOR_B.text }}>
+            <span className="font-display" style={{ fontSize: "clamp(1.25rem, 2.6vw, 1.9rem)", fontWeight: 900, textTransform: "uppercase", color: COLOR_B.text }}>
               {teamName(db, proximoPartido.equipo_b_id)}
             </span>
           </div>
+          {proximoPartido.lugar && (
+            <div className="font-mono-tech" style={{ marginTop: 12, paddingTop: 10, borderTop: `1px solid ${LINE}`, display: "flex", justifyContent: "space-between", fontSize: 11, color: MUTED }}>
+              <span>{proximoPartido.lugar}</span>
+              <span style={{ color: FLUOR, fontWeight: 800 }}>VER FICHA →</span>
+            </div>
+          )}
         </div>
       ) : null}
 
-      {/* MENÚ DE ACCESOS CINÉTICOS FLIPLINK */}
-      <nav aria-label="Navegación principal" style={{ borderTop: `1px solid ${LINE}` }}>
+      {/* MENÚ DE ACCESOS CINÉTICOS FLIPLINK (ANCHO COMPLETO, ALINEADO A LA IZQUIERDA) */}
+      <nav aria-label="Navegación principal" style={{ marginTop: 8, borderTop: `1px solid ${LINE}` }}>
         <FlipLink
           num="01"
           label="PARTIDOS"
@@ -1712,7 +1758,7 @@ function HomeView({ db, setView, ligaId, liga, user, canEdit, onOpenLogin, onOpe
       </nav>
 
       {/* PIE DE PÁGINA CON ACCESO CAMUFLADO PARA ORGANIZADORES / PLANILLEROS */}
-      <footer style={{ marginTop: 12, paddingTop: 12, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+      <footer style={{ marginTop: 12, paddingTop: 14, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
         <button
           type="button"
           onClick={handleSecretAccess}
@@ -1722,7 +1768,7 @@ function HomeView({ db, setView, ligaId, liga, user, canEdit, onOpenLogin, onOpe
             background: "transparent",
             border: "none",
             padding: 0,
-            fontSize: 10,
+            fontSize: 11,
             color: tapCount > 0 ? FLUOR : FAINT,
             cursor: "pointer",
             letterSpacing: "0.08em",
@@ -1740,17 +1786,17 @@ function HomeView({ db, setView, ligaId, liga, user, canEdit, onOpenLogin, onOpe
           style={{
             display: "inline-flex",
             alignItems: "center",
-            gap: 5,
+            gap: 6,
             background: "transparent",
             border: `1px solid ${user ? `${FLUOR}55` : "transparent"}`,
-            padding: "4px 8px",
-            fontSize: 10,
+            padding: "5px 10px",
+            fontSize: 11,
             color: user ? FLUOR : FAINT,
             cursor: "pointer",
           }}
         >
-          <Terminal size={12} />
-          <span>{user ? "CTRL_ACTIVO" : ">_"}</span>
+          <Terminal size={13} />
+          <span>{user ? "CTRL_ACTIVO" : "ACCESO_PLANILLA"}</span>
         </button>
       </footer>
     </div>
@@ -1762,14 +1808,25 @@ function MatchCard({ db, match, onClick, onEdit, onDelete }) {
   const scoreB = matchScore(db, match.id, match.equipo_b_id);
   const pendiente = match.estado === "pendiente";
   const finalized = match.estado === "finalizado";
+  
 
   return (
     <div style={{ ...cardStyle, padding: 16 }}>
       <div className="font-mono-tech" style={{ marginBottom: 10, display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: 11, color: MUTED }}>
         <span style={{ display: "flex", alignItems: "center", gap: 5 }}><Calendar size={12} /> {fmtFecha(match.fecha)} {match.hora ? `· ${match.hora}` : ""}</span>
-        <span style={{ padding: "2px 8px", fontWeight: 700, background: finalized ? ELEVATED : `${FLUOR}1A`, color: finalized ? MUTED : FLUOR, border: `1px solid ${finalized ? LINE : FLUOR}` }}>
-          {finalized ? "FINALIZADO" : pendiente ? "POR INICIAR" : "EN VIVO"}
-        </span>
+        <span
+  className="font-mono-tech"
+  style={{
+    padding: "4px 10px",
+    fontSize: 11,
+    fontWeight: 700,
+    background: finalized ? SURFACE : pendiente ? `${ORANGE}1A` : `${FLUOR}1A`,
+    color: finalized ? MUTED : pendiente ? ORANGE : FLUOR,
+    border: `1px solid ${finalized ? LINE : pendiente ? ORANGE : FLUOR}`,
+  }}
+>
+  {finalized ? "FINALIZADO" : pendiente ? "POR INICIAR" : "EN CURSO"}
+</span>
       </div>
       <button type="button" onClick={onClick} style={{ display: "block", width: "100%", textAlign: "left", background: "transparent", border: "none", padding: 0, cursor: "pointer" }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
@@ -1789,7 +1846,7 @@ function MatchCard({ db, match, onClick, onEdit, onDelete }) {
   );
 }
 
-function MatchesView({ db, commit, setView, ligaId, canEdit, isAdmin, isLigaOrganizer }) {
+function MatchesView({ db, commit, setView, ligaId, canEdit, isAdmin, isLigaOrganizer, setToast }) {
   const [filter, setFilter] = useState("todos");
   const [editTarget, setEditTarget] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
@@ -1800,7 +1857,7 @@ function MatchesView({ db, commit, setView, ligaId, canEdit, isAdmin, isLigaOrga
   const filtrados = useMemo(() => {
     return partidosLiga
       .filter((m) => (filter === "todos" ? true : m.estado === filter))
-      .sort((a, b) => `${b.fecha || ""}${b.hora || ""}`.localeCompare(`${a.fecha || ""}${a.hora || ""}`));
+      .sort((a, b) => `${a.fecha || "9999-99-99"}${a.hora || "99:99"}`.localeCompare(`${b.fecha || "9999-99-99"}${b.hora || "99:99"}`));
   }, [partidosLiga, filter]);
 
   const porFecha = useMemo(() => {
@@ -1809,6 +1866,9 @@ function MatchesView({ db, commit, setView, ligaId, canEdit, isAdmin, isLigaOrga
       const k = m.fecha || "Sin fecha";
       if (!map.has(k)) map.set(k, []);
       map.get(k).push(m);
+    }
+    for (const lista of map.values()) {
+      lista.sort((a, b) => (a.hora || "99:99").localeCompare(b.hora || "99:99"));
     }
     return Array.from(map.entries());
   }, [filtrados]);
@@ -1840,13 +1900,14 @@ function MatchesView({ db, commit, setView, ligaId, canEdit, isAdmin, isLigaOrga
               )}
               <button
                 type="button"
-                onClick={() => setView({ name: "new-match" })}
+                onClick={() => setView({ name: "new" })}
                 style={{ ...btnPrimary, display: "flex", alignItems: "center", gap: 6, padding: "8px 14px" }}
               >
                 <Plus size={15} /> NUEVO PARTIDO
               </button>
             </div>
           )
+          
         }
       />
 
@@ -1880,10 +1941,18 @@ function MatchesView({ db, commit, setView, ligaId, canEdit, isAdmin, isLigaOrga
 
       {porFecha.length === 0 ? (
         <EmptyState
-          text="No hay partidos para el filtro seleccionado."
+          text={
+            filter === "todos"
+              ? "No hay partidos cargados en esta liga."
+              : "No hay partidos para el filtro seleccionado."
+          }
           action={
-            canEdit ? (
-              <button type="button" onClick={() => setView({ name: "new-match" })} style={{ ...btnPrimary, marginTop: 12 }}>
+            canEdit && filter === "todos" ? (
+              <button
+                type="button"
+                onClick={() => setView({ name: "new-match" })}
+                style={{ ...btnPrimary, marginTop: 12 }}
+              >
                 Crear primer partido
               </button>
             ) : null
@@ -1924,10 +1993,8 @@ function MatchesView({ db, commit, setView, ligaId, canEdit, isAdmin, isLigaOrga
           onClose={() => setEditTarget(null)}
           onReopen={() => reabrirDesdeListado(editTarget.id)}
           isAdmin={gestionaLiga}
+          setToast={setToast}
         />
-      )}
-      {deleteTarget && gestionaLiga && (
-        <DeleteMatchModal db={db} match={deleteTarget} commit={commit} onClose={() => setDeleteTarget(null)} />
       )}
     </div>
   );
@@ -1935,7 +2002,7 @@ function MatchesView({ db, commit, setView, ligaId, canEdit, isAdmin, isLigaOrga
 
 // ---------- new match ----------
 
-function NewMatchView({ db, commit, setView, ligaId, isAdmin, isLigaOrganizer }) {
+function NewMatchView({ db, commit, setView, ligaId, isAdmin, isLigaOrganizer, setToast }) {
   const equipos = teamsOf(db, ligaId);
   const gestionaLiga = Boolean(isAdmin || isLigaOrganizer);
   const [equipoA, setEquipoA] = useState("");
@@ -2007,7 +2074,7 @@ function NewMatchView({ db, commit, setView, ligaId, isAdmin, isLigaOrganizer })
 
 // ---------- edit / delete match ----------
 
-function EditMatchModal({ db, match, commit, onClose, onReopen, isAdmin }) {
+function EditMatchModal({ db, match, commit, onClose, onReopen, isAdmin, setToast }) {
   const equipos = teamsOf(db, match.liga_id);
   const finalized = match.estado === "finalizado";
   const tieneStats = db.stats.some((s) => s.partido_id === match.id);
@@ -2018,14 +2085,37 @@ function EditMatchModal({ db, match, commit, onClose, onReopen, isAdmin }) {
   const [fecha, setFecha] = useState(match.fecha);
   const [hora, setHora] = useState(match.hora || "");
   const [lugar, setLugar] = useState(match.lugar || "");
+  const [estado, setEstado] = useState(match.estado || "pendiente");
+  const [swapMatchId, setSwapMatchId] = useState("");
   const [error, setError] = useState("");
   const cambioDeEquipos = equipoA !== match.equipo_a_id || equipoB !== match.equipo_b_id;
+
+  // Partidos candidatos de la misma liga para intercambiar turno/horario (priorizando la misma fecha)
+  const candidatosSwap = useMemo(() => {
+    return matchesOf(db, match.liga_id)
+      .filter((m) => m.id !== match.id)
+      .sort((a, b) => {
+        const mismaFechaA = a.fecha === fecha ? 0 : 1;
+        const mismaFechaB = b.fecha === fecha ? 0 : 1;
+        if (mismaFechaA !== mismaFechaB) return mismaFechaA - mismaFechaB;
+        return `${a.fecha || ""}${a.hora || ""}`.localeCompare(`${b.fecha || ""}${b.hora || ""}`);
+      });
+  }, [db, match.liga_id, match.id, fecha]);
 
   const guardar = () => {
     if (finalized && !isAdmin) return;
     if (cambioDeEquipos && bloquearEquipos) return;
     if (!equipoA || !equipoB) { setError("Elegí los dos equipos."); return; }
     if (equipoA === equipoB) { setError("El equipo local y el visitante no pueden ser el mismo."); return; }
+
+    const ahora = new Date();
+    const hh = String(ahora.getHours()).padStart(2, "0");
+    const mm = String(ahora.getMinutes()).padStart(2, "0");
+    const horaReal = `${hh}:${mm}`;
+    const isoAhora = ahora.toISOString();
+
+    const targetSwap = isAdmin && swapMatchId ? db.matches.find((m) => m.id === swapMatchId) : null;
+
     commit((prev) => ({
       ...prev,
       stats: cambioDeEquipos
@@ -2035,31 +2125,119 @@ function EditMatchModal({ db, match, commit, onClose, onReopen, isAdmin }) {
             return p && (p.equipo_id === equipoA || p.equipo_id === equipoB);
           })
         : prev.stats,
-      matches: prev.matches.map((m) => m.id === match.id
-        ? { ...m, equipo_a_id: equipoA, equipo_b_id: equipoB, fecha, hora: hora || null, lugar: lugar || null }
-        : m),
+      matches: prev.matches.map((m) => {
+        if (m.id === match.id) {
+          const nuevaFecha = targetSwap ? targetSwap.fecha : fecha;
+          const nuevaHora = targetSwap ? (targetSwap.hora || null) : (hora || null);
+          const nuevoLugar = targetSwap ? (targetSwap.lugar || null) : (lugar || null);
+          const nuevoEstado = isAdmin ? estado : m.estado;
+
+          let ajustesReloj = {};
+          if (isAdmin && nuevoEstado !== m.estado) {
+            if (nuevoEstado === "en_curso") {
+              ajustesReloj = {
+                hora_inicio_real: m.hora_inicio_real || horaReal,
+                reloj_segundos: m.reloj_segundos || 0,
+                reloj_corriendo: true,
+                reloj_actualizado_en: isoAhora,
+              };
+            } else if (nuevoEstado === "finalizado") {
+              const segFinal = calcularSegundosActuales(m);
+              ajustesReloj = {
+                reloj_segundos: segFinal,
+                reloj_corriendo: false,
+                resultado_equipo_a: matchScore(prev, m.id, equipoA),
+                resultado_equipo_b: matchScore(prev, m.id, equipoB),
+              };
+            } else if (nuevoEstado === "pendiente") {
+              ajustesReloj = {
+                hora_inicio_real: null,
+                reloj_segundos: 0,
+                reloj_corriendo: false,
+                reloj_actualizado_en: null,
+              };
+            }
+          }
+
+          return {
+            ...m,
+            equipo_a_id: equipoA,
+            equipo_b_id: equipoB,
+            fecha: nuevaFecha,
+            hora: nuevaHora,
+            lugar: nuevoLugar,
+            estado: nuevoEstado,
+            ...ajustesReloj,
+          };
+        }
+
+        if (targetSwap && m.id === targetSwap.id) {
+          return {
+            ...m,
+            fecha,
+            hora: hora || null,
+            lugar: lugar || null,
+          };
+        }
+
+        return m;
+      }),
     }));
+
+    if (targetSwap && setToast) {
+      setToast(
+        `Turno intercambiado con ${teamName(db, targetSwap.equipo_a_id)} vs ${teamName(db, targetSwap.equipo_b_id)}.`
+      );
+    }
     onClose();
   };
 
   return (
     <Modal onClose={onClose} wide>
       <h3 className="font-display" style={{ marginBottom: 12, fontSize: 20, fontWeight: 900, textTransform: "uppercase" }}>Editar partido</h3>
-      {finalized && (
+      {finalized && !isAdmin && (
         <div style={{ marginBottom: 16, border: `1px solid ${GOLD}`, background: `${GOLD}18`, padding: "10px 12px" }}>
-          <p style={{ fontSize: 13, color: GOLD, marginBottom: isAdmin ? 8 : 0 }}>
-            {isAdmin
-              ? "Partido finalizado. Para corregir puntos o estadísticas de jugadores, primero debés reabrirlo."
-              : "Este partido ya fue finalizado. Solo el organizador o administrador puede reabrirlo o modificarlo."}
+          <p style={{ fontSize: 13, color: GOLD }}>
+            Este partido ya fue finalizado. Solo el organizador o administrador puede reabrirlo o modificarlo.
           </p>
-          {isAdmin && (
-            <button type="button" onClick={() => { onReopen(); onClose(); }} className="font-mono-tech" style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 12px", fontSize: 11, fontWeight: 700, color: INK, background: GOLD, border: "none", cursor: "pointer" }}>
-              <Unlock size={14} /> REABRIR PARA EDITAR ESTADÍSTICAS
-            </button>
-          )}
         </div>
       )}
+
       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        {isAdmin && (
+          <div>
+            <label style={labelStyle}>Estado del partido</label>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 6 }}>
+              {[
+                ["pendiente", "POR INICIAR", ORANGE],
+                ["en_curso", "EN CURSO", FLUOR],
+                ["finalizado", "FINALIZADO", MUTED],
+              ].map(([k, label, col]) => {
+                const activo = estado === k;
+                return (
+                  <button
+                    key={k}
+                    type="button"
+                    onClick={() => setEstado(k)}
+                    className="font-mono-tech"
+                    style={{
+                      padding: "9px 6px",
+                      fontSize: 11,
+                      fontWeight: 800,
+                      cursor: "pointer",
+                      border: `1px solid ${activo ? col : LINE}`,
+                      background: activo ? `${col}22` : INK,
+                      color: activo ? col : MUTED,
+                    }}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         <div>
           <label style={labelStyle}>Equipo local</label>
           <select value={equipoA} disabled={bloquearEquipos} onChange={(e) => setEquipoA(e.target.value)} style={inputStyle}>
@@ -2072,14 +2250,40 @@ function EditMatchModal({ db, match, commit, onClose, onReopen, isAdmin }) {
             {equipos.map((t) => <option key={t.id} value={t.id} disabled={t.id === equipoA}>{t.nombre}</option>)}
           </select>
         </div>
+
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
           <div><label style={labelStyle}>Fecha</label><input type="date" disabled={finalized && !isAdmin} value={fecha} onChange={(e) => setFecha(e.target.value)} style={inputStyle} /></div>
           <div><label style={labelStyle}>Hora</label><input type="time" disabled={finalized && !isAdmin} value={hora} onChange={(e) => setHora(e.target.value)} style={inputStyle} /></div>
         </div>
-        <div><label style={labelStyle}>Lugar</label><input type="text" disabled={finalized && !isAdmin} value={lugar} onChange={(e) => setLugar(e.target.value)} style={inputStyle} /></div>
+        <div><label style={labelStyle}>Lugar / Cancha</label><input type="text" disabled={finalized && !isAdmin} value={lugar} onChange={(e) => setLugar(e.target.value)} style={inputStyle} /></div>
+
+        {isAdmin && candidatosSwap.length > 0 && (
+          <div style={{ border: `1px solid ${LINE}`, background: INK, padding: "10px 12px" }}>
+            <label style={{ ...labelStyle, color: FLUOR }}>Intercambiar turno / horario con otro partido (opcional)</label>
+            <select
+              value={swapMatchId}
+              onChange={(e) => setSwapMatchId(e.target.value)}
+              style={{ ...inputStyle, fontSize: 12 }}
+            >
+              <option value="">No intercambiar (usar fecha y hora de arriba)</option>
+              {candidatosSwap.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {fmtFecha(m.fecha)} {m.hora ? `${m.hora} hs` : "Sin hora"} — {teamName(db, m.equipo_a_id)} vs {teamName(db, m.equipo_b_id)}
+                </option>
+              ))}
+            </select>
+            {swapMatchId && (
+              <p className="font-mono-tech" style={{ marginTop: 6, fontSize: 10, color: FLUOR }}>
+                Al guardar, ambos partidos intercambiarán automáticamente su fecha, hora y cancha.
+              </p>
+            )}
+          </div>
+        )}
+
         {cambioDeEquipos && <p style={{ fontSize: 12, color: GOLD, border: `1px solid ${GOLD}`, padding: "8px 10px" }}>Al cambiar los equipos se borrarán las estadísticas de los equipos que salen del partido.</p>}
         {error && <p className="font-mono-tech" style={{ fontSize: 12, color: RED }}>{error}</p>}
       </div>
+
       <div style={{ marginTop: 18, display: "flex", justifyContent: "flex-end", gap: 8 }}>
         <button type="button" onClick={onClose} style={btnGhost}>Cancelar</button>
         {(!finalized || isAdmin) && <button type="button" onClick={guardar} style={btnPrimary}>Guardar cambios</button>}
@@ -2814,7 +3018,7 @@ function MatchView({ db, commit, matchId, setView, canEdit, isAdmin, isLigaOrgan
           otros={otrosDe(dorsalTarget)} onClose={() => setDorsalTarget(null)}
           onSave={(d) => { setDorsal(dorsalTarget.id, d); setDorsalTarget(null); }} />
       )}
-      {editOpen && <EditMatchModal db={db} match={match} commit={commit} onClose={() => setEditOpen(false)} onReopen={reabrir} isAdmin={gestionaLiga} />}
+      {editOpen && <EditMatchModal db={db} match={match} commit={commit} onClose={() => setEditOpen(false)} onReopen={reabrir} isAdmin={gestionaLiga} setToast={setToast}/>}
       {deleteOpen && gestionaLiga && <DeleteMatchModal db={db} match={match} commit={commit} onClose={() => setDeleteOpen(false)} afterDelete={() => setView({ name: "matches" })} />}
     </div>
   );
